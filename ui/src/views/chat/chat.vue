@@ -34,6 +34,7 @@ import DiceTrayFloatingWindow from './components/DiceTrayFloatingWindow.vue'
 import ChatDiceModeControl from './components/ChatDiceModeControl.vue'
 import { getDiceModeLabel, shouldShowDiceTrayTrigger } from './diceMode'
 import IFormPanelHost from '@/components/iform/IFormPanelHost.vue';
+import IFormRightPanelHost from '@/components/iform/IFormRightPanelHost.vue';
 import IFormFloatingWindows from '@/components/iform/IFormFloatingWindows.vue';
 import IFormDrawer from '@/components/iform/IFormDrawer.vue';
 import IFormEmbedInstances from '@/components/iform/IFormEmbedInstances.vue';
@@ -15324,6 +15325,7 @@ onBeforeUnmount(() => {
 
     <IFormEmbedInstances />
     <IFormPanelHost />
+    <IFormRightPanelHost />
 
     <div
       v-if="display.settings.showPinnedMessages && pinnedRows.length > 0"

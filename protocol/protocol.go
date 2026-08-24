@@ -319,6 +319,7 @@ type ChannelIFormMediaOptions struct {
 
 type ChannelIFormStatePayload struct {
 	FormID     string  `json:"formId"`
+	Placement  string  `json:"placement,omitempty"`
 	Floating   bool    `json:"floating"`
 	Collapsed  bool    `json:"collapsed"`
 	Width      int     `json:"width"`

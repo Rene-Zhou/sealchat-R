@@ -3,14 +3,13 @@ import { markRaw, watch, type EffectScope } from 'vue';
 import { api } from './_config';
 import { chatEvent, useChatStore } from './chat';
 import { useUserStore } from './user';
-import type { ChannelIForm, ChannelIFormEventPayload, ChannelIFormStatePayload } from '@/types/iform';
+import type { ChannelIForm, ChannelIFormEventPayload, ChannelIFormPlacement, ChannelIFormStatePayload } from '@/types/iform';
 import { ensureDetachedEffectScope } from './storeEffectScope';
 import { isPrivateIFormChannel, resolveIFormVisibleChannelId } from './iformScope';
 
-interface PanelState {
+interface IFormWindowState {
   windowId: string;
   formId: string;
-  height: number;
   collapsed: boolean;
   forcing: boolean;
   fromPush: boolean;
@@ -18,8 +17,16 @@ interface PanelState {
   autoUnmuteHint: boolean;
 }
 
-interface FloatingState extends PanelState {
+interface PanelState extends IFormWindowState {
+  placement: Exclude<ChannelIFormPlacement, 'floating'>;
   width: number;
+  height: number;
+}
+
+interface FloatingState extends IFormWindowState {
+  placement: 'floating';
+  width: number;
+  height: number;
   x: number;
   y: number;
   minimized: boolean;
@@ -27,7 +34,7 @@ interface FloatingState extends PanelState {
   floating: true;
 }
 
-type IFormSurface = 'panel' | 'floating' | 'drawer';
+type IFormSurface = 'panel' | 'right' | 'floating' | 'drawer';
 
 interface CapabilitySnapshot {
   manage: boolean;
@@ -37,6 +44,7 @@ interface CapabilitySnapshot {
 interface EmbedHostEntry {
   formId: string;
   panel?: HTMLElement | null;
+  right?: HTMLElement | null;
   floating?: HTMLElement | null;
   drawer?: HTMLElement | null;
 }
@@ -103,7 +111,15 @@ export const useIFormStore = defineStore('iform', {
         return [];
       }
       const map = state.panelsByChannel[channelId];
-      return map ? Object.values(map) : [];
+      return map ? Object.values(map).filter((panel) => panel.placement !== 'right') : [];
+    },
+    currentRightPanels(state): PanelState[] {
+      const channelId = this.visibleChannelId;
+      if (!channelId) {
+        return [];
+      }
+      const map = state.panelsByChannel[channelId];
+      return map ? Object.values(map).filter((panel) => panel.placement === 'right') : [];
     },
     currentFloatingWindows(state): FloatingState[] {
       const channelId = this.visibleChannelId;
@@ -114,7 +130,7 @@ export const useIFormStore = defineStore('iform', {
       return map ? Object.values(map).sort((a, b) => a.zIndex - b.zIndex) : [];
     },
     hasInlinePanels(): boolean {
-      return this.currentPanels.length > 0;
+      return this.currentPanels.length > 0 || this.currentRightPanels.length > 0;
     },
     hasFloatingWindows(): boolean {
       return this.currentFloatingWindows.length > 0;
@@ -172,7 +188,7 @@ export const useIFormStore = defineStore('iform', {
       }
       return Object.keys(hosts).filter((windowId) => {
         const registry = hosts[windowId];
-        return !!(registry?.floating || registry?.panel || registry?.drawer);
+        return !!(registry?.floating || registry?.panel || registry?.right || registry?.drawer);
       });
     },
   },
@@ -475,11 +491,15 @@ export const useIFormStore = defineStore('iform', {
       this.ensurePanelMap(channelId);
       const windowId = this.resolveWindowId(formId, options?.windowId);
       const form = this.getForm(channelId, formId);
+      const placement = resolvePanelPlacement(options?.placement);
+      const baseWidth = options?.width ?? form?.defaultWidth ?? 420;
       const baseHeight = options?.height ?? form?.defaultHeight ?? 360;
       const collapsed = options?.collapsed ?? form?.defaultCollapsed ?? false;
       const panel: PanelState = {
         windowId,
         formId,
+        placement,
+        width: clampRightPanelWidth(baseWidth),
         height: Math.max(1, Math.round(baseHeight)),
         collapsed,
         forcing: !!options?.forcing,
@@ -491,6 +511,14 @@ export const useIFormStore = defineStore('iform', {
         ...this.panelsByChannel[channelId],
         [windowId]: panel,
       };
+      if (this.floatingByChannel[channelId]?.[windowId]) {
+        const nextFloating = { ...this.floatingByChannel[channelId] };
+        delete nextFloating[windowId];
+        this.floatingByChannel = {
+          ...this.floatingByChannel,
+          [channelId]: nextFloating,
+        };
+      }
     },
     closePanel(windowId: string) {
       const channelId = this.visibleChannelId;
@@ -526,6 +554,30 @@ export const useIFormStore = defineStore('iform', {
       }
       current.height = Math.max(1, Math.round(height));
     },
+    resizePanelWidth(windowId: string, width: number) {
+      const channelId = this.visibleChannelId;
+      if (!channelId) {
+        return;
+      }
+      const current = this.panelsByChannel[channelId]?.[windowId];
+      if (!current || current.placement !== 'right') {
+        return;
+      }
+      current.width = clampRightPanelWidth(width);
+    },
+    movePanel(windowId: string, placement: Exclude<ChannelIFormPlacement, 'floating'>) {
+      const channelId = this.visibleChannelId;
+      if (!channelId) {
+        return;
+      }
+      const current = this.panelsByChannel[channelId]?.[windowId];
+      if (!current) {
+        return;
+      }
+      current.placement = resolvePanelPlacement(placement);
+      current.collapsed = false;
+      current.fromPush = false;
+    },
     openFloating(formId: string, options?: Partial<FloatingState>, channelIdOverride?: string | null) {
       const channelId = channelIdOverride ?? this.visibleChannelId;
       if (!channelId || !formId) {
@@ -547,6 +599,7 @@ export const useIFormStore = defineStore('iform', {
       const state: FloatingState = {
         windowId,
         formId,
+        placement: 'floating',
         width: size.width,
         height: size.height,
         x: clamped.x,
@@ -564,6 +617,14 @@ export const useIFormStore = defineStore('iform', {
         ...this.floatingByChannel[channelId],
         [windowId]: state,
       };
+      if (this.panelsByChannel[channelId]?.[windowId]) {
+        const nextPanels = { ...this.panelsByChannel[channelId] };
+        delete nextPanels[windowId];
+        this.panelsByChannel = {
+          ...this.panelsByChannel,
+          [channelId]: nextPanels,
+        };
+      }
     },
     closeFloating(windowId: string) {
       const channelId = this.visibleChannelId;
@@ -810,7 +871,8 @@ export const useIFormStore = defineStore('iform', {
       }
       states.forEach((state) => {
         const windowId = this.resolveWindowId(state.formId, state.windowId);
-        if (state.floating) {
+        const placement = resolveStatePlacement(state);
+        if (placement === 'floating') {
           this.openFloating(state.formId, {
             windowId,
             width: state.width,
@@ -826,6 +888,8 @@ export const useIFormStore = defineStore('iform', {
         } else {
           this.openPanel(state.formId, {
             windowId,
+            placement,
+            width: state.width,
             height: state.height,
             collapsed: !!state.collapsed,
             forcing: !!state.force,
@@ -955,7 +1019,7 @@ export const useIFormStore = defineStore('iform', {
         ...current,
         [surface]: null,
       };
-      const hasAny = nextSurface.floating || nextSurface.panel || nextSurface.drawer;
+      const hasAny = nextSurface.floating || nextSurface.panel || nextSurface.right || nextSurface.drawer;
       const nextRegistry = { ...registry };
       if (hasAny) {
         nextRegistry[windowId] = nextSurface;
@@ -977,14 +1041,17 @@ export const useIFormStore = defineStore('iform', {
         return null;
       }
       const hasFloating = !!this.floatingByChannel[targetChannel]?.[windowId];
-      const hasPanel = !!this.panelsByChannel[targetChannel]?.[windowId];
+      const panel = this.panelsByChannel[targetChannel]?.[windowId];
       if (hasFloating) {
-        return registry.floating || registry.panel || registry.drawer || null;
+        return registry.floating || registry.panel || registry.right || registry.drawer || null;
       }
-      if (hasPanel) {
-        return registry.panel || registry.floating || registry.drawer || null;
+      if (panel?.placement === 'right') {
+        return registry.right || registry.panel || registry.floating || registry.drawer || null;
       }
-      return registry.floating || registry.panel || registry.drawer || null;
+      if (panel) {
+        return registry.panel || registry.right || registry.floating || registry.drawer || null;
+      }
+      return registry.floating || registry.panel || registry.right || registry.drawer || null;
     },
     ensureHostRegistry(channelId: string, windowId: string, formId: string) {
       if (!this.embedHostsByChannel[channelId]) {
@@ -1015,7 +1082,32 @@ const FLOATING_PADDING_Y = 16;
 const FLOATING_MIN_Y = 48;
 const FLOATING_BADGE_SIZE = 48;
 const MOBILE_VIEWPORT_WIDTH = 768;
+const RIGHT_PANEL_MIN_WIDTH = 300;
+const RIGHT_PANEL_MAX_WIDTH = 720;
 const DEFAULT_WINDOW_SUFFIX = 'default';
+
+function resolveStatePlacement(state: ChannelIFormStatePayload): ChannelIFormPlacement {
+  if (state.placement === 'right' || state.placement === 'floating' || state.placement === 'top') {
+    return state.placement;
+  }
+  return state.floating ? 'floating' : 'top';
+}
+
+function resolvePanelPlacement(
+  placement?: Exclude<ChannelIFormPlacement, 'floating'>,
+): Exclude<ChannelIFormPlacement, 'floating'> {
+  if (placement === 'right' && resolveViewport().width >= MOBILE_VIEWPORT_WIDTH) {
+    return 'right';
+  }
+  return 'top';
+}
+
+function clampRightPanelWidth(width: number) {
+  const viewport = resolveViewport();
+  const viewportMax = Math.max(RIGHT_PANEL_MIN_WIDTH, Math.round(viewport.width * 0.62));
+  const maxWidth = Math.min(RIGHT_PANEL_MAX_WIDTH, viewportMax);
+  return Math.min(maxWidth, Math.max(RIGHT_PANEL_MIN_WIDTH, Math.round(width || 420)));
+}
 
 function resolveViewport() {
   if (typeof window === 'undefined') {

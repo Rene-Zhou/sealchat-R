@@ -66,9 +66,12 @@ export interface ChannelIFormBridgePolicy {
   capabilities?: string[];
 }
 
+export type ChannelIFormPlacement = 'top' | 'right' | 'floating';
+
 export interface ChannelIFormStatePayload {
   formId: string;
   windowId?: string;
+  placement?: ChannelIFormPlacement;
   floating?: boolean;
   collapsed?: boolean;
   width?: number;

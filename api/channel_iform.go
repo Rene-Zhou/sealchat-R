@@ -1143,6 +1143,25 @@ func dispatchIFormEvent(channelID string, event *protocol.Event, targets []strin
 
 func normalizeStatePayload(state protocol.ChannelIFormStatePayload, form *model.ChannelIFormModel, force bool) protocol.ChannelIFormStatePayload {
 	normalized := state
+	switch strings.ToLower(strings.TrimSpace(normalized.Placement)) {
+	case "right":
+		normalized.Placement = "right"
+		normalized.Floating = false
+	case "floating":
+		normalized.Placement = "floating"
+		normalized.Floating = true
+	case "top":
+		normalized.Placement = "top"
+		normalized.Floating = false
+	default:
+		// Legacy clients only send `floating`. Preserve that contract while
+		// emitting an explicit placement for clients that understand docking.
+		if normalized.Floating {
+			normalized.Placement = "floating"
+		} else {
+			normalized.Placement = "top"
+		}
+	}
 	normalized.Width = sanitizeSize(normalized.Width, form.DefaultWidth)
 	normalized.Height = sanitizeSize(normalized.Height, form.DefaultHeight)
 	normalized.AutoPlay = normalized.AutoPlay || form.MediaOptions.AutoPlay

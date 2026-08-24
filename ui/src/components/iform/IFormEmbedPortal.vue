@@ -9,7 +9,7 @@ import { useIFormStore } from '@/stores/iform';
 const props = defineProps<{
   windowId: string;
   formId: string;
-  surface: 'panel' | 'floating' | 'drawer';
+  surface: 'panel' | 'right' | 'floating' | 'drawer';
 }>();
 
 const hostEl = ref<HTMLElement | null>(null);

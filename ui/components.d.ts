@@ -43,6 +43,7 @@ declare module 'vue' {
     IFormEmbedPortal: typeof import('./src/components/iform/IFormEmbedPortal.vue')['default']
     IFormFloatingWindows: typeof import('./src/components/iform/IFormFloatingWindows.vue')['default']
     IFormPanelHost: typeof import('./src/components/iform/IFormPanelHost.vue')['default']
+    IFormRightPanelHost: typeof import('./src/components/iform/IFormRightPanelHost.vue')['default']
     KeywordSuggestPanel: typeof import('./src/components/chat/KeywordSuggestPanel.vue')['default']
     MentionSuggestPanel: typeof import('./src/components/chat/MentionSuggestPanel.vue')['default']
     MessageImageEditor: typeof import('./src/components/chat/MessageImageEditor.vue')['default']

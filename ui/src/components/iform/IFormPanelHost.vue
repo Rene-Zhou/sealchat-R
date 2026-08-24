@@ -33,13 +33,23 @@
             </n-tooltip>
             <n-tooltip trigger="hover">
               <template #trigger>
-                <n-button quaternary size="tiny" :disabled="!iform.canBroadcast" @click="pushSingle(panel.formId)">
+                <n-button quaternary size="tiny" :disabled="!canDockRight" @click="moveRight(panel.windowId)">
+                  <template #icon>
+                    <n-icon :component="ArrowForwardOutline" />
+                  </template>
+                </n-button>
+              </template>
+              <span>{{ canDockRight ? '移到右侧' : '窄屏下使用上侧面板' }}</span>
+            </n-tooltip>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <n-button quaternary size="tiny" :disabled="!iform.canBroadcast" @click="pushSingle(panel)">
                   <template #icon>
                     <n-icon :component="ShareOutline" />
                   </template>
                 </n-button>
               </template>
-              <span>推送到频道</span>
+              <span>推送当前布局</span>
             </n-tooltip>
             <n-button quaternary size="tiny" @click="closePanel(panel.windowId)">
               <template #icon>
@@ -69,10 +79,10 @@
 
 <script setup lang="ts">
 import { computed, ref, nextTick } from 'vue';
-import { useEventListener } from '@vueuse/core';
+import { useEventListener, useWindowSize } from '@vueuse/core';
 import { useIFormStore } from '@/stores/iform';
 import IFormEmbedPortal from './IFormEmbedPortal.vue';
-import { ChevronDown, ChevronUp, CloseOutline, OpenOutline, ResizeOutline, ShareOutline, VolumeHighOutline } from '@vicons/ionicons5';
+import { ArrowForwardOutline, ChevronDown, ChevronUp, CloseOutline, OpenOutline, ResizeOutline, ShareOutline, VolumeHighOutline } from '@vicons/ionicons5';
 import type { ChannelIForm } from '@/types/iform';
 import { useMessage } from 'naive-ui';
 
@@ -92,6 +102,8 @@ const formMap = computed<Map<string, ChannelIForm>>(() => {
 
 const resolveForm = (formId: string) => formMap.value.get(formId);
 const message = useMessage();
+const { width: viewportWidth } = useWindowSize();
+const canDockRight = computed(() => viewportWidth.value >= 768);
 
 const resizing = ref<{ windowId: string; startHeight: number; startY: number } | null>(null);
 
@@ -122,6 +134,12 @@ const closePanel = (windowId: string) => {
   iform.closePanel(windowId);
 };
 
+const moveRight = (windowId: string) => {
+  if (!canDockRight.value) return;
+  resetResizing();
+  iform.movePanel(windowId, 'right');
+};
+
 const openFloating = async (windowId: string, formId: string) => {
   const form = resolveForm(formId);
   resetResizing();
@@ -144,21 +162,22 @@ const handleSectionClick = (panel: { windowId: string; collapsed: boolean }, eve
   toggleCollapse(panel.windowId);
 };
 
-const pushSingle = async (formId: string) => {
+const pushSingle = async (panel: { formId: string; width: number; height: number; collapsed: boolean }) => {
   if (!iform.canBroadcast) {
     return;
   }
-  const form = resolveForm(formId);
+  const form = resolveForm(panel.formId);
   if (!form) {
     return;
   }
   try {
     await iform.pushStates([
       {
-        formId,
-        width: form.defaultWidth,
-        height: form.defaultHeight,
-        collapsed: false,
+        formId: panel.formId,
+        placement: 'top',
+        width: panel.width || form.defaultWidth,
+        height: panel.height || form.defaultHeight,
+        collapsed: panel.collapsed,
         floating: false,
       },
     ], { force: true });

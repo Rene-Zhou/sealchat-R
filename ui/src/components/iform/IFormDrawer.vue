@@ -14,7 +14,7 @@
           <n-button v-if="isMobileLayout" size="tiny" quaternary @click="iform.closeDrawer()">
             返回
           </n-button>
-          <span>频道嵌入窗</span>
+          <span>频道嵌入工具</span>
         </div>
       </template>
       <div class="iform-drawer__header">
@@ -28,114 +28,173 @@
         <n-button quaternary size="small" @click="refresh">刷新</n-button>
       </div>
 
-      <n-space vertical size="medium">
-        <div class="iform-toolbar">
-          <n-button type="primary" size="small" :disabled="!iform.canManage" @click="openFormModal()">
-            新增控件
-          </n-button>
-          <n-button size="small" :disabled="!iform.canManage" @click="openTemplateModal">
-            安装内置工具
-          </n-button>
-          <n-button size="small" :disabled="!iform.canBroadcast || !iform.selectedFormIds.length" @click="pushSelected">
-            推送选中
-          </n-button>
-          <n-button
-            size="small"
-            tertiary
-            :disabled="!iform.canManageWorldShared || !iform.selectedWorldShareEligibleForms.length"
-            @click="toggleWorldShareSelected"
-          >
-            {{ iform.selectedWorldShareAllShared ? '取消世界共享' : '推送到世界' }}
-          </n-button>
-          <n-button size="small" tertiary :disabled="!iform.canManage || !forms.length" @click="migrationModalVisible = true">
-            迁移/复制
-          </n-button>
-          <n-button size="small" tertiary :disabled="!forms.length" @click="exportForms">导出</n-button>
-          <n-button size="small" tertiary :disabled="!iform.canManage" @click="openImport">导入</n-button>
-          <input ref="importInput" type="file" accept="application/json,.json" hidden @change="handleImportFile" />
-        </div>
+      <n-tabs v-model:value="activeTab" type="line" animated class="iform-workspace-tabs">
+        <n-tab-pane name="manage" tab="工具管理">
+          <div class="iform-workspace-actions">
+            <n-dropdown trigger="click" :options="addMenuOptions" @select="handleAddMenu">
+              <n-button type="primary" size="small" :disabled="!iform.canManage">添加工具</n-button>
+            </n-dropdown>
+            <n-dropdown trigger="click" :options="utilityMenuOptions" @select="handleUtilityMenu">
+              <n-button size="small" secondary>更多操作</n-button>
+            </n-dropdown>
+            <input ref="importInput" type="file" accept="application/json,.json" hidden @change="handleImportFile" />
+          </div>
 
-        <n-alert v-if="!iform.canManage" type="info" closable>
-          你当前没有管理权限，仅可查看与打开控件。
-        </n-alert>
+          <n-alert v-if="!iform.canManage" type="info" closable class="iform-permission-alert">
+            你当前没有管理权限，但仍可查看和打开频道工具。
+          </n-alert>
 
-        <n-spin :show="iform.loading">
-          <template v-if="forms.length">
-            <div class="iform-card" v-for="form in forms" :key="form.id">
-              <div class="iform-card__header">
-                <div class="iform-card__title">
-                  <n-checkbox
-                    :disabled="!iform.canBroadcast"
-                    :checked="iform.selectedFormIds.includes(form.id)"
-                    @update:checked="iform.toggleSelection(form.id)"
-                  />
-                  <div>
-                    <strong>{{ form.name || '未命名控件' }}</strong>
-                    <div class="iform-card__meta-row">
+          <n-spin :show="iform.loading">
+            <div v-if="forms.length" class="iform-card-list">
+              <article v-for="form in forms" :key="form.id" class="iform-card">
+                <div class="iform-card__header">
+                  <div class="iform-card__identity">
+                    <span class="iform-card__type">{{ form.url ? 'WEB' : 'HTML' }}</span>
+                    <div>
+                      <strong>{{ form.name || '未命名控件' }}</strong>
                       <p class="iform-card__meta">
-                        默认 {{ form.defaultWidth }} × {{ form.defaultHeight }} · {{ form.defaultCollapsed ? '折叠' : '展开' }} ·
-                        {{ form.defaultFloating ? '弹出' : '面板' }}
+                        {{ form.defaultWidth }} × {{ form.defaultHeight }} · {{ form.defaultCollapsed ? '默认折叠' : '默认展开' }}
                       </p>
-                      <div class="iform-card__tags">
-                        <n-tag v-if="form.templateMissing" size="small" type="error">模板不可用</n-tag>
-                        <n-tag v-else-if="form.templateArchived" size="small" type="warning">模板已归档</n-tag>
-                        <n-tag v-else-if="form.templateOrigin === 'builtin'" size="small" type="info">内置模板</n-tag>
-                        <n-tag v-else-if="form.templateOrigin === 'platform'" size="small" type="info">平台模板</n-tag>
-                        <n-tag v-else size="small">独立控件</n-tag>
-                        <n-tag v-if="!form.sharedRef" size="small">本频道</n-tag>
-                        <n-tag v-if="form.worldShared && !form.sharedRef" size="small" type="success">世界共享</n-tag>
-                        <n-tag v-if="form.sharedRef" size="small" type="warning">世界引用</n-tag>
-                      </div>
                     </div>
                   </div>
+                  <div class="iform-card__actions">
+                    <n-button size="small" secondary @click="openLocal(form, 'top')">打开</n-button>
+                    <n-dropdown trigger="click" :options="formMenuOptions(form)" @select="handleFormMenu($event, form)">
+                      <n-button size="small" quaternary>更多</n-button>
+                    </n-dropdown>
+                  </div>
                 </div>
-                <div class="iform-card__actions">
-                  <n-button quaternary size="tiny" @click="iform.openPanel(form.id)">面板</n-button>
-                  <n-button quaternary size="tiny" @click="openFloating(form.id)">弹出</n-button>
-                  <n-button quaternary size="tiny" @click="copyEmbedLink(form)">复制嵌入</n-button>
-                  <n-button quaternary size="tiny" :disabled="!iform.canBroadcast" @click="pushSingle(form)">推送</n-button>
-                  <n-button quaternary size="tiny" :disabled="!iform.canManage || !canEditForm(form)" @click="openFormModal(form)">编辑</n-button>
-                  <n-button quaternary size="tiny" :disabled="!iform.canManage || !canDeleteForm(form)" @click="confirmDelete(form)">
-                    <template #icon>
-                      <n-icon :component="TrashOutline" />
-                    </template>
-                  </n-button>
+                <div class="iform-card__tags">
+                  <n-tag v-if="form.templateMissing" size="small" type="error">模板不可用</n-tag>
+                  <n-tag v-else-if="form.templateArchived" size="small" type="warning">模板已归档</n-tag>
+                  <n-tag v-else-if="form.templateOrigin === 'builtin'" size="small" type="info">内置模板</n-tag>
+                  <n-tag v-else-if="form.templateOrigin === 'platform'" size="small" type="info">平台模板</n-tag>
+                  <n-tag v-else size="small">独立控件</n-tag>
+                  <n-tag v-if="form.worldShared && !form.sharedRef" size="small" type="success">世界共享</n-tag>
+                  <n-tag v-if="form.sharedRef" size="small" type="warning">世界引用</n-tag>
+                  <n-tag v-if="form.mediaOptions?.autoPlay" size="small">自动播放</n-tag>
                 </div>
+              </article>
+            </div>
+            <n-empty v-else description="当前频道暂无嵌入工具">
+              <template #extra>
+                <n-button v-if="iform.canManage" size="small" type="primary" @click="openTemplateModal">从模板添加</n-button>
+              </template>
+            </n-empty>
+          </n-spin>
+        </n-tab-pane>
+
+        <n-tab-pane name="push" tab="推送工具">
+          <n-alert v-if="!iform.canBroadcast" type="warning" class="iform-permission-alert">
+            你没有向频道推送嵌入工具的权限。
+          </n-alert>
+
+          <section class="iform-push-section">
+            <div class="iform-section-heading">
+              <div>
+                <span>01</span>
+                <strong>选择工具</strong>
               </div>
-              <div class="iform-card__body">
-                <div class="iform-card__field">
-                  <span>访问方式：</span>
-                  <n-tag size="small" type="info">{{ form.url ? 'URL' : '嵌入代码' }}</n-tag>
-                  <n-tag v-if="form.mediaOptions?.autoPlay" size="small" type="success">自动播放</n-tag>
-                  <n-tag v-if="form.mediaOptions?.autoUnmute" size="small" type="success">自动解除静音</n-tag>
-                </div>
-                <div class="iform-card__field">
-                  <span>默认行为：</span>
-                  <n-switch
-                    size="small"
-                    :disabled="!iform.canManage || !canEditForm(form)"
-                    :value="form.defaultCollapsed"
-                    @update:value="updateForm(form, { defaultCollapsed: $event })"
-                  >
-                    <template #checked>折叠</template>
-                    <template #unchecked>展开</template>
-                  </n-switch>
-                  <n-switch
-                    size="small"
-                    :disabled="!iform.canManage || !canEditForm(form)"
-                    :value="form.defaultFloating"
-                    @update:value="updateForm(form, { defaultFloating: $event })"
-                  >
-                    <template #checked>弹出</template>
-                    <template #unchecked>面板</template>
-                  </n-switch>
-                </div>
+              <n-button text size="small" :disabled="!iform.canBroadcast || !forms.length" @click="toggleSelectAllForms">
+                {{ allFormsSelected ? '取消全选' : '全选' }}
+              </n-button>
+            </div>
+            <n-checkbox-group :value="iform.selectedFormIds" @update:value="updateSelectedFormIds">
+              <div v-if="forms.length" class="iform-push-tool-list">
+                <label v-for="form in forms" :key="form.id" class="iform-push-tool" :class="{ 'is-selected': iform.selectedFormIds.includes(form.id) }">
+                  <n-checkbox :value="form.id" :disabled="!iform.canBroadcast" />
+                  <span>
+                    <strong>{{ form.name || '未命名控件' }}</strong>
+                    <small>{{ form.defaultWidth }} × {{ form.defaultHeight }}</small>
+                  </span>
+                </label>
+              </div>
+              <n-empty v-else description="没有可推送的工具" />
+            </n-checkbox-group>
+          </section>
+
+          <section class="iform-push-section">
+            <div class="iform-section-heading">
+              <div><span>02</span><strong>展示方式</strong></div>
+            </div>
+            <n-radio-group v-model:value="pushModel.placement" size="small" class="iform-placement-options">
+              <n-radio-button value="top">上侧面板</n-radio-button>
+              <n-radio-button value="right" :disabled="isMobileLayout">右侧面板</n-radio-button>
+              <n-radio-button value="floating">浮动窗口</n-radio-button>
+            </n-radio-group>
+            <p v-if="isMobileLayout" class="iform-field-hint">移动端收到右侧推送时会自动使用上侧面板。</p>
+
+            <div class="iform-push-fields">
+              <label class="iform-push-field">
+                <span>{{ pushModel.placement === 'floating' ? '初始状态' : '面板状态' }}</span>
+                <n-switch v-if="pushModel.placement === 'floating'" v-model:value="pushModel.minimized" size="small">
+                  <template #checked>最小化</template>
+                  <template #unchecked>展开</template>
+                </n-switch>
+                <n-switch v-else v-model:value="pushModel.collapsed" size="small">
+                  <template #checked>收起</template>
+                  <template #unchecked>展开</template>
+                </n-switch>
+              </label>
+              <label class="iform-push-field">
+                <span>尺寸</span>
+                <n-checkbox v-model:checked="pushModel.useCustomSize">统一设置</n-checkbox>
+              </label>
+              <div v-if="pushModel.useCustomSize" class="iform-push-size">
+                <n-input-number
+                  v-if="pushModel.placement !== 'top'"
+                  v-model:value="pushModel.width"
+                  :min="240"
+                  :max="1920"
+                  placeholder="宽度"
+                />
+                <span v-if="pushModel.placement === 'floating'">×</span>
+                <n-input-number
+                  v-if="pushModel.placement !== 'right'"
+                  v-model:value="pushModel.height"
+                  :min="160"
+                  :max="1440"
+                  placeholder="高度"
+                />
               </div>
             </div>
-          </template>
-          <n-empty v-else description="当前频道暂无嵌入控件" />
-        </n-spin>
-      </n-space>
+          </section>
+
+          <section class="iform-push-section">
+            <div class="iform-section-heading">
+              <div><span>03</span><strong>推送范围</strong></div>
+            </div>
+            <n-radio-group v-model:value="pushModel.audience" size="small">
+              <n-radio value="all">频道内所有成员</n-radio>
+              <n-radio value="members">指定成员</n-radio>
+            </n-radio-group>
+            <n-select
+              v-if="pushModel.audience === 'members'"
+              v-model:value="pushModel.targetUserIds"
+              multiple
+              filterable
+              :options="pushTargetOptions"
+              placeholder="选择接收成员"
+              class="iform-target-select"
+            />
+          </section>
+
+          <footer class="iform-push-footer">
+            <div>
+              <span>推送摘要</span>
+              <strong>{{ pushSummary }}</strong>
+            </div>
+            <n-button
+              type="primary"
+              :loading="pushSubmitting"
+              :disabled="!canSubmitPush"
+              @click="pushSelected"
+            >
+              推送到频道
+            </n-button>
+          </footer>
+        </n-tab-pane>
+      </n-tabs>
 
       <n-modal v-model:show="formModalVisible" preset="dialog" :title="editingForm ? '编辑控件' : '新增控件'" :positive-text="editingForm ? '保存' : '创建'" negative-text="取消" @positive-click="handleSubmit" @negative-click="handleCancel">
         <n-form label-placement="left" label-width="72">
@@ -250,14 +309,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { useWindowSize } from '@vueuse/core';
 import { useIFormStore } from '@/stores/iform';
 import { useChatStore } from '@/stores/chat';
 import { useUtilsStore } from '@/stores/utils';
 import { useMessage, useDialog } from 'naive-ui';
-import { TrashOutline } from '@vicons/ionicons5';
-import type { ChannelIForm } from '@/types/iform';
+import type { ChannelIForm, ChannelIFormPlacement } from '@/types/iform';
 import { copyTextWithFallback } from '@/utils/clipboard';
 import { generateIFormEmbedLink } from '@/utils/iformEmbedLink';
 import { api } from '@/stores/_config';
@@ -272,11 +330,12 @@ const message = useMessage();
 const dialog = useDialog();
 
 const forms = computed(() => [...iform.currentForms]);
+const activeTab = ref<'manage' | 'push'>('manage');
 
 const { width: viewportWidth } = useWindowSize();
 const drawerWidth = computed(() => {
-  if (!viewportWidth.value) return 420;
-  return Math.min(480, viewportWidth.value < 640 ? viewportWidth.value : 420);
+  if (!viewportWidth.value) return 520;
+  return Math.min(560, viewportWidth.value < 640 ? viewportWidth.value : 520);
 });
 const isMobileLayout = computed(() => viewportWidth.value > 0 && viewportWidth.value < 640);
 
@@ -317,6 +376,62 @@ const templatePage = ref(1);
 const templatePageSize = 30;
 const templateTotal = ref(0);
 const importInput = ref<HTMLInputElement | null>(null);
+const pushSubmitting = ref(false);
+const pushModel = reactive<{
+  placement: ChannelIFormPlacement;
+  collapsed: boolean;
+  minimized: boolean;
+  useCustomSize: boolean;
+  width: number;
+  height: number;
+  audience: 'all' | 'members';
+  targetUserIds: string[];
+}>({
+  placement: 'top',
+  collapsed: false,
+  minimized: false,
+  useCustomSize: false,
+  width: 480,
+  height: 360,
+  audience: 'all',
+  targetUserIds: [],
+});
+
+const selectedForms = computed(() => forms.value.filter((form) => iform.selectedFormIds.includes(form.id)));
+const allFormsSelected = computed(() => forms.value.length > 0 && selectedForms.value.length === forms.value.length);
+const pushTargetOptions = computed(() => (chat.curChannelUsers || [])
+  .filter((member) => !!member?.id)
+  .map((member) => ({
+    label: member.nick || member.name || member.id,
+    value: member.id,
+  })));
+const canSubmitPush = computed(() => (
+  iform.canBroadcast
+  && selectedForms.value.length > 0
+  && !pushSubmitting.value
+  && (pushModel.audience === 'all' || pushModel.targetUserIds.length > 0)
+));
+const placementLabels: Record<ChannelIFormPlacement, string> = {
+  top: '上侧面板',
+  right: '右侧面板',
+  floating: '浮动窗口',
+};
+const pushSummary = computed(() => {
+  const toolText = selectedForms.value.length ? `${selectedForms.value.length} 个工具` : '未选择工具';
+  const audienceText = pushModel.audience === 'all' ? '全部成员' : `${pushModel.targetUserIds.length} 位成员`;
+  const sizeText = pushModel.useCustomSize ? '统一尺寸' : '各自默认尺寸';
+  return `${toolText} · ${placementLabels[pushModel.placement]} · ${audienceText} · ${sizeText}`;
+});
+
+const addMenuOptions = computed(() => [
+  { label: '新建独立工具', key: 'create', disabled: !iform.canManage },
+  { label: '从模板安装', key: 'template', disabled: !iform.canManage },
+]);
+const utilityMenuOptions = computed(() => [
+  { label: '迁移或复制', key: 'migrate', disabled: !iform.canManage || !forms.value.length },
+  { label: '导入配置', key: 'import', disabled: !iform.canManage },
+  { label: '导出配置', key: 'export', disabled: !forms.value.length },
+]);
 
 const channelOptions = computed(() => flattenChannels(chat.channelTree || [], chat.curChannel?.id));
 
@@ -334,6 +449,88 @@ function flattenChannels(tree: any[], excludeId?: string, depth = 0): Array<{ la
   });
   return result;
 }
+
+watch(
+  () => iform.visibleChannelId,
+  () => {
+    pushModel.audience = 'all';
+    pushModel.targetUserIds = [];
+  },
+);
+
+const handleAddMenu = (key: string) => {
+  if (key === 'create') {
+    openFormModal();
+  } else if (key === 'template') {
+    void openTemplateModal();
+  }
+};
+
+const handleUtilityMenu = (key: string) => {
+  if (key === 'migrate') {
+    migrationModalVisible.value = true;
+  } else if (key === 'import') {
+    openImport();
+  } else if (key === 'export') {
+    exportForms();
+  }
+};
+
+const formMenuOptions = (form: ChannelIForm) => [
+  { label: '在右侧打开', key: 'open-right', disabled: isMobileLayout.value },
+  { label: '作为浮窗打开', key: 'open-floating' },
+  { label: '复制嵌入链接', key: 'copy-link' },
+  { type: 'divider', key: 'display-divider' },
+  { label: '配置并推送', key: 'prepare-push', disabled: !iform.canBroadcast },
+  { label: '编辑配置', key: 'edit', disabled: !iform.canManage || !canEditForm(form) },
+  {
+    label: form.worldShared ? '取消世界共享' : '共享到世界',
+    key: 'world-share',
+    disabled: !iform.canManageWorldShared || !!form.sharedRef || iform.isReadonlyForm(form),
+  },
+  { type: 'divider', key: 'danger-divider' },
+  { label: '删除工具', key: 'delete', disabled: !iform.canManage || !canDeleteForm(form) },
+];
+
+const handleFormMenu = (key: string, form: ChannelIForm) => {
+  if (key === 'open-right') {
+    openLocal(form, 'right');
+  } else if (key === 'open-floating') {
+    openLocal(form, 'floating');
+  } else if (key === 'copy-link') {
+    void copyEmbedLink(form);
+  } else if (key === 'prepare-push') {
+    iform.setSelected([form.id]);
+    activeTab.value = 'push';
+  } else if (key === 'edit') {
+    openFormModal(form);
+  } else if (key === 'world-share') {
+    void toggleWorldShare(form);
+  } else if (key === 'delete') {
+    confirmDelete(form);
+  }
+};
+
+const openLocal = (form: ChannelIForm, placement: ChannelIFormPlacement) => {
+  if (placement === 'floating') {
+    openFloating(form.id);
+    return;
+  }
+  iform.openPanel(form.id, {
+    placement,
+    width: form.defaultWidth,
+    height: form.defaultHeight,
+    collapsed: !!form.defaultCollapsed,
+  });
+};
+
+const updateSelectedFormIds = (values: Array<string | number>) => {
+  iform.setSelected(values.map(String));
+};
+
+const toggleSelectAllForms = () => {
+  iform.setSelected(allFormsSelected.value ? [] : forms.value.map((form) => form.id));
+};
 
 const resetFormModel = () => {
   editingForm.value = null;
@@ -483,17 +680,6 @@ const handleCancel = () => {
   return true;
 };
 
-const updateForm = async (form: ChannelIForm, payload: Record<string, unknown>) => {
-  if (!canEditForm(form)) {
-    return;
-  }
-  try {
-    await iform.updateForm(form.id, payload);
-  } catch (error: any) {
-    message.error(error?.response?.data?.message || '更新失败');
-  }
-};
-
 const confirmDelete = (form: ChannelIForm) => {
   if (!iform.canManage || !canDeleteForm(form)) {
     return;
@@ -563,48 +749,30 @@ const copyEmbedLink = async (form: ChannelIForm) => {
   }
 };
 
-const pushSingle = async (form: ChannelIForm) => {
-  if (!iform.canBroadcast) {
-    return;
-  }
-  try {
-    await iform.pushStates([
-      {
-        formId: form.id,
-        width: form.defaultWidth,
-        height: form.defaultHeight,
-        collapsed: !!form.defaultCollapsed,
-        floating: !!form.defaultFloating,
-      },
-    ], { force: true });
-    message.success('已推送到频道');
-  } catch (error: any) {
-    message.error(error?.response?.data?.message || '推送失败');
-  }
-};
-
 const pushSelected = async () => {
-  if (!iform.canBroadcast || !iform.selectedFormIds.length) {
+  if (!canSubmitPush.value) {
     return;
   }
-  const states = forms.value
-    .filter((form) => iform.selectedFormIds.includes(form.id))
-    .map((form) => ({
+  const states = selectedForms.value.map((form) => ({
       formId: form.id,
-      width: form.defaultWidth,
-      height: form.defaultHeight,
-      collapsed: !!form.defaultCollapsed,
-      floating: !!form.defaultFloating,
+      placement: pushModel.placement,
+      width: pushModel.useCustomSize ? pushModel.width : form.defaultWidth,
+      height: pushModel.useCustomSize ? pushModel.height : form.defaultHeight,
+      collapsed: pushModel.placement === 'floating' ? false : pushModel.collapsed,
+      floating: pushModel.placement === 'floating',
+      minimized: pushModel.placement === 'floating' && pushModel.minimized,
     }));
-  if (!states.length) {
-    message.warning('未选择有效控件');
-    return;
-  }
+  pushSubmitting.value = true;
   try {
-    await iform.pushStates(states, { force: true });
-    message.success('已推送选中控件');
+    await iform.pushStates(states, {
+      force: true,
+      targetUserIds: pushModel.audience === 'members' ? pushModel.targetUserIds : undefined,
+    });
+    message.success(`已推送 ${states.length} 个频道工具`);
   } catch (error: any) {
     message.error(error?.response?.data?.message || '推送失败');
+  } finally {
+    pushSubmitting.value = false;
   }
 };
 
@@ -612,19 +780,14 @@ const canEditForm = (form: ChannelIForm) => !iform.isReadonlyForm(form);
 
 const canDeleteForm = (form: ChannelIForm) => !form.sharedRef && !iform.isReadonlyForm(form);
 
-const toggleWorldShareSelected = async () => {
+const toggleWorldShare = async (form: ChannelIForm) => {
   if (!iform.canManageWorldShared) {
     return;
   }
-  const formIds = iform.selectedWorldShareEligibleForms.map((form) => form.id);
-  if (!formIds.length) {
-    message.warning('未选择可共享控件');
-    return;
-  }
-  const enabled = !iform.selectedWorldShareAllShared;
+  const enabled = !form.worldShared;
   try {
-    await iform.toggleWorldShare(formIds, enabled);
-    message.success(enabled ? '已推送到世界' : '已取消世界共享');
+    await iform.toggleWorldShare([form.id], enabled);
+    message.success(enabled ? '已共享到世界' : '已取消世界共享');
   } catch (error: any) {
     message.error(error?.response?.data?.message || error?.message || '世界共享切换失败');
   }
@@ -783,20 +946,51 @@ const handleMigration = async () => {
   margin-top: 0.35rem;
 }
 
-.iform-toolbar {
+.iform-workspace-tabs {
+  min-height: 0;
+}
+
+.iform-workspace-actions {
   display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+  margin-bottom: 0.9rem;
+}
+
+.iform-permission-alert {
+  margin-bottom: 0.9rem;
+}
+
+.iform-card-list {
+  display: grid;
+  gap: 0.65rem;
 }
 
 .iform-card {
-  border: 1px solid var(--iform-card-border, rgba(148, 163, 184, 0.25));
-  border-radius: 16px;
-  padding: 0.85rem 1rem;
-  background: var(--iform-card-bg, var(--sc-bg-elevated, #f8fafc));
-  box-shadow: 0 15px 35px rgba(15, 23, 42, 0.15);
-  margin-bottom: 0.75rem;
+  position: relative;
+  overflow: hidden;
+  padding: 0.9rem;
+  border: 1px solid var(--iform-card-border, var(--sc-border-mute, rgba(148, 163, 184, 0.24)));
+  border-radius: 14px;
+  background: var(--iform-card-bg, var(--sc-bg-surface, rgba(248, 250, 252, 0.72)));
   color: var(--iform-card-text, var(--sc-text-primary, #0f172a));
+  transition: border-color 160ms ease, transform 160ms ease;
+}
+
+.iform-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  background: var(--sc-primary-color, #3b82f6);
+  opacity: 0.55;
+}
+
+.iform-card:hover {
+  border-color: rgba(var(--sc-primary-rgb, 59, 130, 246), 0.34);
+  transform: translateY(-1px);
 }
 
 .iform-card strong {
@@ -805,59 +999,237 @@ const handleMigration = async () => {
 
 .iform-card__header {
   display: flex;
-  justify-content: space-between;
-  gap: 1rem;
   align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
 }
 
-.iform-card__title {
+.iform-card__identity {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.7rem;
+  min-width: 0;
+}
+
+.iform-card__identity > div {
+  min-width: 0;
+}
+
+.iform-card__identity strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.iform-card__type {
+  display: grid;
+  width: 2.45rem;
+  height: 2.45rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid rgba(var(--sc-primary-rgb, 59, 130, 246), 0.28);
+  border-radius: 10px;
+  background: rgba(var(--sc-primary-rgb, 59, 130, 246), 0.09);
+  color: var(--sc-primary-color, #2563eb);
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
 }
 
 .iform-card__meta {
-  margin: 0;
-  font-size: 0.8rem;
+  margin: 0.15rem 0 0;
   color: var(--sc-text-secondary, rgba(100, 116, 139, 0.9));
-}
-
-.iform-card__meta-row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-  margin-top: 0.15rem;
+  font-size: 0.76rem;
 }
 
 .iform-card__tags {
   display: flex;
-  gap: 0.35rem;
   flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.65rem;
+  padding-left: 3.15rem;
 }
 
 .iform-card__actions {
   display: flex;
-  gap: 0.35rem;
-  flex-wrap: wrap;
+  flex: 0 0 auto;
+  gap: 0.2rem;
 }
 
-.iform-card__body {
-  margin-top: 0.75rem;
-  font-size: 0.85rem;
-  color: var(--sc-text-secondary, rgba(100, 116, 139, 0.95));
+.iform-push-section {
+  margin-bottom: 0.8rem;
+  padding: 0.9rem;
+  border: 1px solid var(--sc-border-mute, rgba(148, 163, 184, 0.22));
+  border-radius: 14px;
+  background: var(--sc-bg-surface, rgba(248, 250, 252, 0.58));
 }
 
-.iform-card__field {
+.iform-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.iform-section-heading > div {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  margin-bottom: 0.35rem;
+}
+
+.iform-section-heading span {
+  color: var(--sc-primary-color, #2563eb);
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.iform-push-tool-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.iform-push-tool {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  padding: 0.62rem;
+  border: 1px solid var(--sc-border-mute, rgba(148, 163, 184, 0.2));
+  border-radius: 10px;
+  background: var(--sc-bg-elevated, rgba(255, 255, 255, 0.72));
+  cursor: pointer;
+  transition: border-color 150ms ease, background 150ms ease;
+}
+
+.iform-push-tool.is-selected {
+  border-color: rgba(var(--sc-primary-rgb, 59, 130, 246), 0.48);
+  background: rgba(var(--sc-primary-rgb, 59, 130, 246), 0.08);
+}
+
+.iform-push-tool > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.iform-push-tool strong {
+  overflow: hidden;
+  color: var(--sc-text-primary, #0f172a);
+  font-size: 0.82rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.iform-push-tool small,
+.iform-field-hint {
+  color: var(--sc-text-secondary, #64748b);
+  font-size: 0.7rem;
+}
+
+.iform-placement-options {
+  display: flex;
+  width: 100%;
+}
+
+.iform-placement-options :deep(.n-radio-button) {
+  flex: 1;
+  text-align: center;
+}
+
+.iform-field-hint {
+  margin: 0.45rem 0 0;
+}
+
+.iform-push-fields {
+  display: grid;
+  gap: 0.7rem;
+  margin-top: 0.85rem;
+  padding-top: 0.8rem;
+  border-top: 1px dashed var(--sc-border-mute, rgba(148, 163, 184, 0.26));
+}
+
+.iform-push-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  color: var(--sc-text-secondary, #64748b);
+  font-size: 0.78rem;
+}
+
+.iform-push-size {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.iform-push-size :deep(.n-input-number) {
+  flex: 1;
+}
+
+.iform-target-select {
+  margin-top: 0.7rem;
+}
+
+.iform-push-footer {
+  position: sticky;
+  z-index: 2;
+  bottom: -1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin: 0.25rem -0.25rem -1rem;
+  padding: 0.85rem 0.25rem 1rem;
+  border-top: 1px solid var(--sc-border-mute, rgba(148, 163, 184, 0.22));
+  background: var(--sc-bg-elevated, #ffffff);
+}
+
+.iform-push-footer > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.iform-push-footer span {
+  color: var(--sc-text-secondary, #64748b);
+  font-size: 0.66rem;
+}
+
+.iform-push-footer strong {
+  overflow: hidden;
+  color: var(--sc-text-primary, #0f172a);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .iform-form__size {
   display: flex;
   align-items: center;
   gap: 0.35rem;
+}
+
+@media (max-width: 639px) {
+  .iform-push-tool-list {
+    grid-template-columns: 1fr;
+  }
+
+  .iform-card__header,
+  .iform-push-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .iform-card__actions {
+    justify-content: flex-end;
+  }
+
+  .iform-card__tags {
+    padding-left: 0;
+  }
 }
 </style>
