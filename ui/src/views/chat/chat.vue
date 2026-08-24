@@ -15319,13 +15319,14 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
-    <div v-if="display.favoriteBarEnabled" class="favorite-bar-wrapper px-4">
-      <ChannelFavoriteBar @manage="channelFavoritesVisible = true" />
-    </div>
-
     <IFormEmbedInstances />
-    <IFormPanelHost />
-    <IFormRightPanelHost />
+    <div class="chat-channel-workspace">
+      <section class="chat-channel-workspace__conversation" aria-label="频道会话">
+        <div v-if="display.favoriteBarEnabled" class="favorite-bar-wrapper px-4">
+          <ChannelFavoriteBar @manage="channelFavoritesVisible = true" />
+        </div>
+
+        <IFormPanelHost />
 
     <div
       v-if="display.settings.showPinnedMessages && pinnedRows.length > 0"
@@ -16657,7 +16658,10 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
-  </div>
+      </div>
+      </section>
+      <IFormRightPanelHost />
+    </div>
   </div>
 
   <RightClickMenu />

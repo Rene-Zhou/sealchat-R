@@ -1,12 +1,11 @@
 <template>
-  <teleport to="body">
-    <aside
-      v-if="panels.length && activePanel"
-      class="iform-right-panel"
-      :class="{ 'is-collapsed': activePanel.collapsed, 'is-resizing': !!resizing }"
-      :style="panelStyle"
-      aria-label="右侧频道嵌入面板"
-    >
+  <aside
+    v-if="panels.length && activePanel"
+    class="iform-right-panel"
+    :class="{ 'is-collapsed': activePanel.collapsed, 'is-resizing': !!resizing }"
+    :style="panelStyle"
+    aria-label="右侧频道嵌入面板"
+  >
     <button
       v-if="activePanel.collapsed"
       type="button"
@@ -98,17 +97,32 @@
           />
         </section>
       </div>
-      <div class="iform-right-panel__resize" @mousedown.prevent="startResizing(activePanel, $event)">
+      <div
+        class="iform-right-panel__resize"
+        role="separator"
+        aria-label="调整频道工具面板宽度"
+        aria-orientation="vertical"
+        :aria-valuenow="activePanel.width"
+        aria-valuemin="300"
+        aria-valuemax="720"
+        tabindex="0"
+        @pointerdown.prevent="startResizing(activePanel, $event)"
+        @pointermove="handleResizeMove"
+        @pointerup="finishResizing"
+        @pointercancel="finishResizing"
+        @lostpointercapture="finishResizing"
+        @keydown.left.prevent="resizeActivePanel(24)"
+        @keydown.right.prevent="resizeActivePanel(-24)"
+      >
         <span />
       </div>
     </div>
-    </aside>
-  </teleport>
+  </aside>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { useEventListener, useWindowSize } from '@vueuse/core';
+import { useWindowSize } from '@vueuse/core';
 import { useMessage } from 'naive-ui';
 import {
   ArrowUpOutline,
@@ -130,7 +144,7 @@ const message = useMessage();
 const panels = computed(() => iform.currentRightPanels);
 const formMap = computed(() => new Map(iform.currentForms.map((form) => [form.id, form])));
 const activeWindowId = ref('');
-const resizing = ref<{ windowId: string; startWidth: number; startX: number } | null>(null);
+const resizing = ref<{ windowId: string; pointerId: number; startWidth: number; startX: number } | null>(null);
 const { width: viewportWidth } = useWindowSize();
 
 const activePanel = computed(() => (
@@ -209,32 +223,57 @@ const pushCurrent = async (panel: NonNullable<typeof activePanel.value>) => {
   }
 };
 
-const startResizing = (panel: NonNullable<typeof activePanel.value>, event: MouseEvent) => {
-  resizing.value = { windowId: panel.windowId, startWidth: panel.width, startX: event.clientX };
+const startResizing = (panel: NonNullable<typeof activePanel.value>, event: PointerEvent) => {
+  if (event.pointerType === 'mouse' && event.button !== 0) return;
+  resizing.value = {
+    windowId: panel.windowId,
+    pointerId: event.pointerId,
+    startWidth: panel.width,
+    startX: event.clientX,
+  };
+  try {
+    (event.currentTarget as HTMLElement | null)?.setPointerCapture?.(event.pointerId);
+  } catch {
+    // Ignore capture failures; pointer events still resize while over the handle.
+  }
 };
 
-useEventListener(window, 'mousemove', (event: MouseEvent) => {
-  if (!resizing.value) return;
+const resizeActivePanel = (delta: number) => {
+  if (!activePanel.value) return;
+  iform.resizePanelWidth(activePanel.value.windowId, activePanel.value.width + delta);
+};
+
+const handleResizeMove = (event: PointerEvent) => {
+  if (!resizing.value || resizing.value.pointerId !== event.pointerId) return;
   event.preventDefault();
   iform.resizePanelWidth(
     resizing.value.windowId,
     resizing.value.startWidth + resizing.value.startX - event.clientX,
   );
-});
-useEventListener(window, 'mouseup', () => { resizing.value = null; });
-useEventListener(window, 'blur', () => { resizing.value = null; });
+};
+
+const finishResizing = (event: PointerEvent) => {
+  if (!resizing.value || resizing.value.pointerId !== event.pointerId) return;
+  resizing.value = null;
+  try {
+    (event.currentTarget as HTMLElement | null)?.releasePointerCapture?.(event.pointerId);
+  } catch {
+    // Ignore capture release failures after cancellation or element removal.
+  }
+};
 </script>
 
 <style scoped>
 .iform-right-panel {
-  position: fixed;
-  z-index: 31;
-  top: 4.35rem;
-  right: 1rem;
-  bottom: 1rem;
+  position: relative;
+  z-index: 3;
+  flex: 0 0 auto;
+  height: 100%;
+  min-height: 0;
   min-width: 300px;
   max-width: min(720px, 62vw);
-  transition: width 180ms ease, transform 180ms ease;
+  box-sizing: border-box;
+  transition: width 180ms ease;
 }
 
 .iform-right-panel.is-collapsed {
@@ -253,11 +292,12 @@ useEventListener(window, 'blur', () => { resizing.value = null; });
   width: 100%;
   height: 100%;
   overflow: hidden;
-  border: 1px solid var(--sc-border-strong, rgba(15, 23, 42, 0.14));
-  border-radius: 18px;
+  border: none;
+  border-left: 1px solid var(--sc-border-strong, rgba(15, 23, 42, 0.14));
+  border-radius: 0;
   background: var(--sc-bg-elevated, #ffffff);
   color: var(--sc-text-primary, #0f172a);
-  box-shadow: -18px 22px 54px rgba(15, 23, 42, 0.18);
+  box-shadow: -12px 0 30px rgba(15, 23, 42, 0.1);
 }
 
 .iform-right-panel__card.has-tabs {
@@ -385,6 +425,7 @@ useEventListener(window, 'blur', () => { resizing.value = null; });
   left: -0.35rem;
   width: 0.7rem;
   cursor: ew-resize;
+  touch-action: none;
 }
 
 .iform-right-panel__resize span {
@@ -410,13 +451,15 @@ useEventListener(window, 'blur', () => { resizing.value = null; });
   align-items: center;
   gap: 0.6rem;
   width: 44px;
-  min-height: 10rem;
+  height: 100%;
+  min-height: 0;
   padding: 0.75rem 0.45rem;
-  border: 1px solid var(--sc-border-strong, rgba(15, 23, 42, 0.14));
-  border-radius: 14px 0 0 14px;
+  border: none;
+  border-left: 1px solid var(--sc-border-strong, rgba(15, 23, 42, 0.14));
+  border-radius: 0;
   background: var(--sc-bg-elevated, #ffffff);
   color: var(--sc-text-primary, #0f172a);
-  box-shadow: -10px 14px 34px rgba(15, 23, 42, 0.16);
+  box-shadow: -8px 0 22px rgba(15, 23, 42, 0.1);
   cursor: pointer;
 }
 

@@ -1,6 +1,40 @@
 /* 频道背景层样式 */
 .chat-root-container {
   position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+
+.chat-channel-workspace {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: stretch;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-channel-workspace__conversation {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-channel-workspace__conversation > .chat {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto !important;
+}
+
+.chat-channel-workspace__conversation > .edit-area {
+  flex: 0 0 auto;
+  min-height: 0;
 }
 
 .chat-root-container--embed {
@@ -8,13 +42,13 @@
   overflow: hidden;
 }
 
-.chat-root-container--embed > .chat {
+.chat-root-container--embed .chat-channel-workspace__conversation > .chat {
   flex: 1 1 auto;
   min-height: 0;
   height: auto !important;
 }
 
-.chat-root-container--embed > .edit-area {
+.chat-root-container--embed .chat-channel-workspace__conversation > .edit-area {
   flex: 0 0 auto;
   min-height: 0;
 }
@@ -4010,4 +4044,3 @@
   opacity: 0;
   transform: translateY(-10px);
 }
-
