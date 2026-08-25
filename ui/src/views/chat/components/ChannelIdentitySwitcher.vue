@@ -257,7 +257,7 @@ const displayedButtonLabel = computed(() => {
 });
 
 const isCompactButton = computed(() => props.iconOnly || (props.compact && isMobile.value));
-const avatarSize = computed(() => (isCompactButton.value ? 24 : 28));
+const avatarSize = computed(() => (isCompactButton.value ? 24 : 22));
 
 const avatarSrc = computed(() => {
   const resolved = buildAttachmentUrl(
@@ -866,7 +866,7 @@ watch([dropdownVisible, sortedIdentitySignature, () => canManageIdentities.value
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.25rem 0.6rem;
+  padding: 0.1875rem 0.75rem 0.1875rem 0.25rem;
   border-radius: 999px;
   border: 1px solid var(--sc-border-mute, rgba(148, 163, 184, 0.35));
   background-color: var(--sc-bg-elevated, rgba(248, 250, 252, 0.9));
