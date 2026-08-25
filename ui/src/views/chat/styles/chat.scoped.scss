@@ -2301,6 +2301,22 @@
   align-self: stretch;
 }
 
+.chat-input-editor-row:not(.chat-input-editor-row--minimal) .chat-input-send-inline {
+  position: absolute;
+  inset-inline-end: 8px;
+  inset-block-end: 8px;
+  align-self: auto;
+  z-index: 6;
+}
+
+.chat-input-editor-row:not(.chat-input-editor-row--minimal) .chat-input-editor-main :deep(.hybrid-input) {
+  padding-right: 3.5rem;
+}
+
+.chat-input-editor-row:not(.chat-input-editor-row--minimal) .chat-input-editor-main :deep(.tiptap-content) {
+  padding-right: 3.5rem;
+}
+
 .chat-input-send-inline .n-button {
   width: 44px;
   height: 44px;
@@ -2319,18 +2335,26 @@
 .send-action-btn {
   width: 44px !important;
   height: 44px !important;
-  border-radius: 10px !important;
+  border-radius: 999px !important;
   padding: 0 !important;
-  background-color: var(--sc-chip-bg) !important;
-  border-color: var(--sc-border-mute) !important;
-  color: var(--sc-text-primary) !important;
-  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+  background-color: var(--sc-primary-color, var(--primary-color, #3388de)) !important;
+  border-color: transparent !important;
+  color: #fff !important;
+  box-shadow: 0 3px 8px rgba(var(--sc-primary-rgb, 51, 136, 222), 0.32);
+  transition: background-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 }
 
 .send-action-btn:hover:not(:disabled) {
-  background-color: rgba(59, 130, 246, 0.15) !important;
-  border-color: rgba(59, 130, 246, 0.4) !important;
-  color: #2563eb !important;
+  background-color: color-mix(in srgb, var(--sc-primary-color, var(--primary-color, #3388de)) 90%, #000) !important;
+  border-color: transparent !important;
+  color: #fff !important;
+  box-shadow: 0 6px 14px rgba(var(--sc-primary-rgb, 51, 136, 222), 0.4);
+  transform: translateY(-1px);
+}
+
+.send-action-btn:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 2px 6px rgba(var(--sc-primary-rgb, 51, 136, 222), 0.3);
 }
 
 .send-action-btn:disabled {
@@ -2355,9 +2379,9 @@
 }
 
 :root[data-display-palette='night'] .send-action-btn:hover:not(:disabled) {
-  background-color: rgba(96, 165, 250, 0.2) !important;
-  border-color: rgba(96, 165, 250, 0.45) !important;
-  color: #60a5fa !important;
+  background-color: color-mix(in srgb, var(--sc-primary-color, var(--primary-color, #60a5fa)) 86%, #fff) !important;
+  border-color: transparent !important;
+  color: color-mix(in srgb, #000 82%, #fff) !important;
 }
 
 :root[data-display-palette='night'] .send-action-btn--compact {
@@ -2531,7 +2555,7 @@
   .send-action-btn {
     width: 40px !important;
     height: 40px !important;
-    border-radius: 8px !important;
+    border-radius: 999px !important;
   }
 
   .send-action-btn--compact,
