@@ -890,6 +890,7 @@ watch([dropdownVisible, sortedIdentitySignature, () => canManageIdentities.value
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  margin-inline-start: 0.25rem;
 }
 
 .identity-switcher__avatar {
@@ -902,6 +903,7 @@ watch([dropdownVisible, sortedIdentitySignature, () => canManageIdentities.value
   height: 10px;
   border-radius: 9999px;
   border: 1px solid var(--sc-border-mute, rgba(148, 163, 184, 0.45));
+  margin-inline-start: -0.3rem;
 }
 
 .identity-switcher__favorite {
