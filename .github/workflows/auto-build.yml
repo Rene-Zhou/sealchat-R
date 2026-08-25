@@ -13,7 +13,7 @@ permissions:
 env:
   COMMIT_ID: "${{ github.sha }}"
   NO_BUILD_PROMPT: "no new commits, no need to build."
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/sealchat
+  IMAGE_NAME: ghcr.io/rene-zhou/sealchat
 
 jobs:
   ui-build:
