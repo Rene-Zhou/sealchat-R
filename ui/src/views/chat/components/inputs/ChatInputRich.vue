@@ -28,6 +28,27 @@ import {
 } from '@/utils/tiptapSmartLink';
 import { normalizePerformanceEffect, type PerformanceEffect, type PerformanceEnterMode } from '@/utils/tiptap-performance-mark';
 import type { PerformanceCommandType } from '@/utils/tiptap-performance-node';
+import {
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
+  Bold,
+  Braces,
+  ClearFormatting,
+  Code,
+  Heading,
+  Highlight,
+  Italic,
+  Link,
+  List,
+  ListNumbers,
+  Minus,
+  Photo,
+  Quote,
+  Strikethrough,
+  TextResize,
+  Underline,
+} from '@vicons/tabler';
 
 const props = withDefaults(defineProps<{
   modelValue: string
@@ -1365,28 +1386,6 @@ const applyCustomHighlightColor = () => {
 const applyCustomTextColor = () => {
   setTextColor(customTextColor.value);
 };
-
-const currentBlockTypeOption = computed(() => {
-  void editorStateVersion.value;
-  return blockTypeOptions.find((option) => option.value === selectedBlockType.value) || blockTypeOptions[0];
-});
-
-const currentFontSizeOption = computed(() => {
-  void editorStateVersion.value;
-  const matched = fontSizeOptions.find((option) => option.value === selectedFontSize.value);
-  if (matched) {
-    return matched;
-  }
-  if (selectedFontSize.value) {
-    const shortLabel = selectedFontSize.value.replace(/px$/i, '');
-    return {
-      value: selectedFontSize.value,
-      shortLabel,
-      label: `${shortLabel} px`,
-    };
-  }
-  return fontSizeOptions[0];
-});
 
 const normalizeFontSizeValue = (value: string): string | null => {
   const trimmed = value.trim();
@@ -2951,7 +2950,7 @@ defineExpose({
                   :type="selectedBlockType !== 'paragraph' ? 'primary' : 'default'"
                   title="标题层级"
                 >
-                  <span class="tiptap-toolbar-picker-btn__value">{{ currentBlockTypeOption.shortLabel }}</span>
+                  <n-icon :component="Heading" size="17" />
                   <span class="tiptap-toolbar-picker-btn__caret">▾</span>
                 </n-button>
               </div>
@@ -2988,7 +2987,7 @@ defineExpose({
                   :type="selectedFontSize ? 'primary' : 'default'"
                   title="字体大小"
                 >
-                  <span class="tiptap-toolbar-picker-btn__value">{{ currentFontSizeOption.shortLabel }}</span>
+                  <n-icon :component="TextResize" size="17" />
                   <span class="tiptap-toolbar-picker-btn__caret">▾</span>
                 </n-button>
               </div>
@@ -3031,7 +3030,7 @@ defineExpose({
             @click="toggleBold"
             title="粗体 (Ctrl+B)"
           >
-            <span class="font-bold">B</span>
+            <n-icon :component="Bold" size="17" />
           </n-button>
           <n-button
             size="small"
@@ -3040,7 +3039,7 @@ defineExpose({
             @click="toggleItalic"
             title="斜体 (Ctrl+I)"
           >
-            <span class="italic">I</span>
+            <n-icon :component="Italic" size="17" />
           </n-button>
           <n-popover
             trigger="manual"
@@ -3060,7 +3059,7 @@ defineExpose({
                   :type="isDecorationActive('underline') ? 'primary' : 'default'"
                   title="下划线样式 (Ctrl+U)"
                 >
-                  <span class="underline">U</span>
+                  <n-icon :component="Underline" size="17" />
                 </n-button>
               </div>
             </template>
@@ -3145,7 +3144,7 @@ defineExpose({
                   :type="isDecorationActive('line-through') ? 'primary' : 'default'"
                   title="删除线样式"
                 >
-                  <span class="line-through">S</span>
+                  <n-icon :component="Strikethrough" size="17" />
                 </n-button>
               </div>
             </template>
@@ -3219,7 +3218,7 @@ defineExpose({
             @click="toggleSpoiler"
             title="隐藏/揭示"
           >
-            <span class="font-semibold">SP</span>
+            <span class="tiptap-toolbar__glyph">SP</span>
           </n-button>
           <n-button
             size="small"
@@ -3228,7 +3227,7 @@ defineExpose({
             @click="toggleCode"
             title="行内代码"
           >
-            <span class="font-mono text-xs">&lt;/&gt;</span>
+            <n-icon :component="Code" size="17" />
           </n-button>
           <n-button
             size="small"
@@ -3237,7 +3236,7 @@ defineExpose({
             @click="openRubyModal"
             title="注音 / Ruby"
           >
-            Rb
+            <span class="tiptap-toolbar__glyph">Rb</span>
           </n-button>
           <template v-if="isMobile">
             <span ref="performanceTriggerRef">
@@ -3249,7 +3248,7 @@ defineExpose({
                 class="tiptap-toolbar-btn"
                 @click="performancePopoverShow ? closePerformancePopover() : openPerformancePopover()"
               >
-                Fx
+                <span class="tiptap-toolbar__glyph">Fx</span>
               </n-button>
             </span>
           </template>
@@ -3270,7 +3269,7 @@ defineExpose({
                   class="tiptap-toolbar-btn"
                   @click="performancePopoverShow ? closePerformancePopover() : openPerformancePopover()"
                 >
-                  Fx
+                  <span class="tiptap-toolbar__glyph">Fx</span>
                 </n-button>
               </span>
             </template>
@@ -3383,7 +3382,7 @@ defineExpose({
                 title="高亮颜色"
                 class="tiptap-toolbar-btn"
               >
-                <span class="tiptap-highlight-icon">H</span>
+                <n-icon :component="Highlight" size="17" />
               </n-button>
             </template>
             <div class="tiptap-color-picker" @pointerdown.stop="markOverlayInteraction">
@@ -3426,7 +3425,7 @@ defineExpose({
                 title="文字颜色"
                 class="tiptap-toolbar-btn"
               >
-                <span class="tiptap-textcolor-icon">A</span>
+                <span class="tiptap-toolbar__glyph tiptap-textcolor-icon">A</span>
               </n-button>
             </template>
             <div class="tiptap-color-picker" @pointerdown.stop="markOverlayInteraction">
@@ -3465,7 +3464,7 @@ defineExpose({
             title="选择字体"
             @click="toggleFontSelectorExpanded"
           >
-            A
+            <span class="tiptap-toolbar__glyph">A</span>
           </n-button>
           <n-select
             v-else
@@ -3497,7 +3496,7 @@ defineExpose({
             @click="setTextAlign('left')"
             title="左对齐"
           >
-            ≡
+            <n-icon :component="AlignLeft" size="17" />
           </n-button>
           <n-button
             size="small"
@@ -3506,7 +3505,7 @@ defineExpose({
             @click="setTextAlign('center')"
             title="居中"
           >
-            ≣
+            <n-icon :component="AlignCenter" size="17" />
           </n-button>
           <n-button
             size="small"
@@ -3515,7 +3514,7 @@ defineExpose({
             @click="setTextAlign('right')"
             title="右对齐"
           >
-            ≣
+            <n-icon :component="AlignRight" size="17" />
           </n-button>
         </div>
 
@@ -3529,7 +3528,7 @@ defineExpose({
             @click="toggleBulletList"
             title="无序列表"
           >
-            •
+            <n-icon :component="List" size="17" />
           </n-button>
           <n-button
             size="small"
@@ -3538,7 +3537,7 @@ defineExpose({
             @click="toggleOrderedList"
             title="有序列表"
           >
-            1.
+            <n-icon :component="ListNumbers" size="17" />
           </n-button>
           <n-button
             size="small"
@@ -3547,7 +3546,7 @@ defineExpose({
             @click="toggleBlockquote"
             title="引用"
           >
-            "
+            <n-icon :component="Quote" size="17" />
           </n-button>
           <n-button
             size="small"
@@ -3556,7 +3555,7 @@ defineExpose({
             @click="toggleCodeBlock"
             title="代码块"
           >
-            { }
+            <n-icon :component="Braces" size="17" />
           </n-button>
         </div>
 
@@ -3570,7 +3569,7 @@ defineExpose({
             @click="isActive('link') ? unsetLink() : setLink()"
             :title="isActive('link') ? '移除链接' : '插入链接'"
           >
-            🔗
+            <n-icon :component="Link" size="17" />
           </n-button>
           <n-button
             size="small"
@@ -3578,7 +3577,7 @@ defineExpose({
             @click="emit('upload-button-click', 'rich-editor')"
             title="插入图片"
           >
-            🖼
+            <n-icon :component="Photo" size="17" />
           </n-button>
           <n-tooltip trigger="hover">
             <template #trigger>
@@ -3588,7 +3587,7 @@ defineExpose({
                 @click="insertStateWidgetTemplate"
                 title="插入三段状态文本"
               >
-                ◫
+                <span class="tiptap-toolbar__glyph">◫</span>
               </n-button>
             </template>
             插入三段状态文本：`[选项1|选项2|选项3]`
@@ -3602,7 +3601,7 @@ defineExpose({
                 @click="insertIFormEmbedLink"
                 title="创建并插入 iForm 嵌入"
               >
-                ⧉
+                <span class="tiptap-toolbar__glyph">⧉</span>
               </n-button>
             </template>
             {{ canQuickCreateIForm ? '弹窗创建 iForm 并自动插入链接' : '当前频道无权限或不可创建 iForm' }}
@@ -3613,7 +3612,7 @@ defineExpose({
             @click="insertHorizontalRule"
             title="分割线"
           >
-            ―
+            <n-icon :component="Minus" size="17" />
           </n-button>
           <n-button
             size="small"
@@ -3621,7 +3620,7 @@ defineExpose({
             @click="clearFormatting"
             title="清除格式"
           >
-            ⊗
+            <n-icon :component="ClearFormatting" size="17" />
           </n-button>
         </div>
       </div>
@@ -4260,8 +4259,8 @@ defineExpose({
 .tiptap-toolbar {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
-  padding: 0.5rem 0.75rem;
+  gap: 4px;
+  padding: 6px 8px;
   border-bottom: 1px solid var(--sc-border-mute, #e5e7eb);
   background-color: var(--sc-bg-elevated, #ffffff);
   flex-wrap: wrap;
@@ -4270,19 +4269,47 @@ defineExpose({
 .tiptap-toolbar__group {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
+  gap: 4px;
+}
+
+/* Material 3 风格工具栏按钮：32x32、8px 圆角（small shape）、state layer 悬停/激活 */
+.tiptap-toolbar :deep(.n-button) {
+  min-width: 32px;
+  height: 32px;
+  padding: 0 6px;
+  border-radius: 8px;
+}
+
+.tiptap-toolbar :deep(.n-button:not(.n-button--disabled):hover) {
+  background-color: rgba(var(--sc-primary-rgb, 37, 99, 235), 0.08);
+}
+
+.tiptap-toolbar :deep(.n-button--primary-type) {
+  background-color: rgba(var(--sc-primary-rgb, 37, 99, 235), 0.16);
+}
+
+.tiptap-toolbar :deep(.n-button--primary-type:not(.n-button--disabled):hover) {
+  background-color: rgba(var(--sc-primary-rgb, 37, 99, 235), 0.22);
+}
+
+/* 无对应图标的功能保留短文字字形，与图标按钮视觉对齐 */
+.tiptap-toolbar__glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.01em;
 }
 
 .tiptap-toolbar-picker-btn {
   gap: 0.2rem;
 }
 
-.tiptap-toolbar-picker-btn__value {
-  min-width: 1.25rem;
-  text-align: center;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  line-height: 1;
+.tiptap-toolbar-picker-btn :deep(.n-button__content) {
+  gap: 2px;
 }
 
 .tiptap-toolbar-picker-btn__caret {
@@ -4313,9 +4340,9 @@ defineExpose({
 
 .tiptap-toolbar__divider {
   width: 1px;
-  height: 1.25rem;
-  background-color: var(--sc-border-mute, #e5e7eb);
-  margin: 0 0.25rem;
+  height: 20px;
+  background-color: var(--sc-border-mute, rgba(148, 163, 184, 0.35));
+  margin: 0 6px;
 }
 
 .tiptap-editor-wrapper {
@@ -4762,28 +4789,8 @@ defineExpose({
   }
 }
 
-/* 工具栏颜色图标样式 - 与其他图标一致 */
-.tiptap-highlight-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.25rem;
-  height: 1.25rem;
-  border-radius: 0.25rem;
-  font-weight: 600;
-  font-size: 0.75rem;
-  background-color: rgba(254, 240, 138, 0.6);
-  color: #4b5563;
-}
-
+/* 工具栏文字颜色图标样式（尺寸与布局由 .tiptap-toolbar__glyph 统一约束，仅保留色彩指示） */
 .tiptap-textcolor-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.25rem;
-  height: 1.25rem;
-  font-weight: 600;
-  font-size: 0.85rem;
   color: #4b5563;
   border-bottom: 2px solid #3b82f6;
 }
@@ -4921,11 +4928,6 @@ defineExpose({
   &:hover {
     color: #f87171;
   }
-}
-
-:root[data-display-palette='night'] .tiptap-highlight-icon {
-  background-color: rgba(254, 240, 138, 0.3);
-  color: #e5e7eb;
 }
 
 :root[data-display-palette='night'] .tiptap-textcolor-icon {
