@@ -2161,6 +2161,11 @@
   margin-top: 0.75rem;
 }
 
+.chat-input-editor-row:not(.chat-input-editor-row--minimal) {
+  margin-inline: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
 .chat-input-editor-row--minimal {
   align-items: center;
   gap: 0.45rem;
@@ -2185,7 +2190,8 @@
 }
 
 .chat-input-editor-row:not(.chat-input-editor-row--minimal) .chat-input-editor-main :deep(.hybrid-input) {
-  min-height: 46px;
+  min-height: 56px;
+  border-radius: 16px;
 }
 
 .chat-input-editor-row--minimal .chat-input-editor-main {
@@ -2313,13 +2319,17 @@
   padding-right: 3.5rem;
 }
 
+.chat-input-editor-row:not(.chat-input-editor-row--minimal) .chat-input-editor-main :deep(.tiptap-editor) {
+  border-radius: 16px;
+}
+
 .chat-input-editor-row:not(.chat-input-editor-row--minimal) .chat-input-editor-main :deep(.tiptap-content) {
   padding-right: 3.5rem;
 }
 
 .chat-input-send-inline .n-button {
-  width: 44px;
-  height: 44px;
+  width: 40px;
+  height: 40px;
   flex-shrink: 0;
 }
 
@@ -2333,8 +2343,8 @@
 }
 
 .send-action-btn {
-  width: 44px !important;
-  height: 44px !important;
+  width: 40px !important;
+  height: 40px !important;
   border-radius: 999px !important;
   padding: 0 !important;
   background-color: var(--sc-primary-color, var(--primary-color, #3388de)) !important;
@@ -2398,7 +2408,7 @@
 }
 
 .edit-action-btn {
-  width: 44px !important;
+  width: 40px !important;
   height: auto !important;
   flex: 1 1 0;
   min-height: 20px;
@@ -3056,6 +3066,8 @@
   gap: clamp(0.2rem, 0.7vw, 0.4rem);
   flex-wrap: nowrap;
   min-width: 0;
+  padding-inline: 0.75rem;
+  box-sizing: border-box;
 }
 
 .input-floating-toolbar :deep(.n-button.n-button--primary-type.n-button--medium-type.n-button--circle) {
