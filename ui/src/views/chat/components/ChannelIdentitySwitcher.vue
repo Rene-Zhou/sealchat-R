@@ -866,7 +866,9 @@ watch([dropdownVisible, sortedIdentitySignature, () => canManageIdentities.value
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.1875rem 0.75rem 0.1875rem 0.25rem;
+  /* 高度 32px + 头像 22px：左侧视觉间隙与上下同为 5px（含 1px 边框），头像圆心与胶囊左圆角圆心重合 */
+  height: 32px;
+  padding: 0 0.75rem 0 4px;
   border-radius: 999px;
   border: 1px solid var(--sc-border-mute, rgba(148, 163, 184, 0.35));
   background-color: var(--sc-bg-elevated, rgba(248, 250, 252, 0.9));
