@@ -4495,16 +4495,22 @@ defineExpose({
   min-width: 12.5rem;
 }
 
-/* 窄视口（如 1080p/150% 缩放）下收缩字体选择器，保证工具栏单行排布 */
+/* 窄视口（如 1080p/150% 缩放）下收缩按钮与字体选择器，保证工具栏单行排布 */
 @media (max-width: 1400px) {
+  .tiptap-toolbar :deep(.n-button) {
+    min-width: 26px;
+    height: 26px;
+    padding: 0 2px;
+  }
+
   .tiptap-toolbar__group--font {
     flex-basis: 6rem;
     min-width: 6rem;
   }
 
   .tiptap-toolbar__group--font.is-expanded {
-    flex-basis: 10rem;
-    min-width: 10rem;
+    flex-basis: 9.5rem;
+    min-width: 9.5rem;
   }
 }
 .tiptap-platform-font-select {
