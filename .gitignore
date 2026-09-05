@@ -19,6 +19,7 @@
 !model/message_attachment_test.go
 !service/theater_world_scope_test.go
 !service/theater_package_test.go
+!service/theater_image_asset_preset_test.go
 *.test.ts
 *.test.tsx
 *.test.js
@@ -77,3 +78,4 @@ skills-lock.json
 /.sealchat-update
 /data11
 /testdata
+/.chatgpt

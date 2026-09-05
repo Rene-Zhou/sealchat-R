@@ -11,10 +11,12 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"sealchat/model"
 	"sealchat/utils"
@@ -22,6 +24,7 @@ import (
 
 type theaterPackageRemap struct {
 	scenes            map[string]string
+	folders           map[string]string
 	objects           map[string]string
 	resources         map[string]string
 	audio             map[string]string
@@ -98,6 +101,15 @@ func importTheaterPackage(ctx context.Context, job *model.TheaterPackageJobModel
 	if err := validateTheaterSharedSnapshot(snapshot); err != nil {
 		return summary, err
 	}
+	var importedPresets TheaterPackageSceneOverlayPresetsDocument
+	if manifest.SceneOverlayPresets != nil {
+		if err := decodeStrictJSONFile(theaterPackageAbsolutePath(extractDir, manifest.SceneOverlayPresets.Path), &importedPresets); err != nil || importedPresets.Version != 1 {
+			return summary, newTheaterError(TheaterErrorSchemaUnsupported, "场景预设文件无效", 409, nil)
+		}
+		if len(importedPresets.Presets) > theaterSceneOverlayPresetMaxCount {
+			return summary, newTheaterError(TheaterErrorLimitExceeded, "导入场景预设数量超限", 409, nil)
+		}
+	}
 	manifestResourceIDs := map[string]struct{}{}
 	for _, resource := range manifest.Resources {
 		manifestResourceIDs[resource.ID] = struct{}{}
@@ -112,13 +124,16 @@ func importTheaterPackage(ctx context.Context, job *model.TheaterPackageJobModel
 	}
 
 	remap := theaterPackageRemap{
-		scenes: map[string]string{}, objects: map[string]string{}, resources: map[string]string{},
+		scenes: map[string]string{}, folders: map[string]string{}, objects: map[string]string{}, resources: map[string]string{},
 		audio: map[string]string{}, appearance: map[string]string{}, attachments: map[string]string{},
 		sourceWorldID: manifest.SourceWorldID, sourceChannelID: manifest.SourceInputChannelID,
 		worldID: job.TargetWorldID, channelID: job.InputChannelID, resourceChannelID: room.ChannelID,
 	}
 	for id := range snapshot.Scenes {
 		remap.scenes[id] = utils.NewID()
+	}
+	for _, folder := range snapshot.SceneFolders {
+		remap.folders[folder.ID] = utils.NewID()
 	}
 	for _, scene := range snapshot.Scenes {
 		for id := range scene.Objects {
@@ -215,7 +230,7 @@ func importTheaterPackage(ctx context.Context, job *model.TheaterPackageJobModel
 			return nil
 		}
 		var current model.TheaterRoomModel
-		if err := tx.Where("id = ?", room.ID).First(&current).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", room.ID).First(&current).Error; err != nil {
 			return err
 		}
 		currentSnapshot, currentHash, err := buildTheaterSnapshot(tx, &current, true)
@@ -237,6 +252,16 @@ func importTheaterPackage(ctx context.Context, job *model.TheaterPackageJobModel
 		preImportExpiresAt := time.Now().Add(theaterSnapshotRetention)
 		if err := createTheaterResourceHolds(tx, preImport, &preImportExpiresAt); err != nil {
 			return err
+		}
+		if len(currentSnapshot.SceneFolders)+len(remappedSnapshot.SceneFolders) > theaterMaxSceneFolders {
+			return newTheaterError(TheaterErrorLimitExceeded, "导入后场景文件夹数量超限", 409, map[string]any{"limit": theaterMaxSceneFolders})
+		}
+		mergedFolders, folderRemap := mergeTheaterSceneFolders(currentSnapshot.SceneFolders, remappedSnapshot.SceneFolders)
+		for id, scene := range remappedSnapshot.Scenes {
+			if scene.FolderID != "" {
+				scene.FolderID = folderRemap[scene.FolderID]
+			}
+			remappedSnapshot.Scenes[id] = scene
 		}
 
 		for _, resource := range manifest.Resources {
@@ -276,7 +301,7 @@ func importTheaterPackage(ctx context.Context, job *model.TheaterPackageJobModel
 			scene := remappedSnapshot.Scenes[id]
 			if err := tx.Create(&model.TheaterSceneModel{
 				StringPKBaseModel: model.StringPKBaseModel{ID: scene.ID}, RoomID: current.ID,
-				Name: scene.Name, SwitchText: scene.SwitchText, SortOrder: maxOrder + int64(index) + 1, Locked: scene.Locked,
+				Name: scene.Name, SwitchText: scene.SwitchText, SortOrder: maxOrder + int64(index) + 1, FolderID: scene.FolderID, Locked: scene.Locked, Published: scene.Published,
 				StateJSON: defaultJSON(scene.State, `{}`), SchemaVersion: model.TheaterSchemaVersion,
 				CreatedBy: job.ActorUserID, UpdatedBy: job.ActorUserID,
 			}).Error; err != nil {
@@ -295,20 +320,35 @@ func importTheaterPackage(ctx context.Context, job *model.TheaterPackageJobModel
 		if err := importTheaterPackageEffectOrganizer(tx, extractDir, &current, job.ActorUserID, manifest, remap); err != nil {
 			return err
 		}
+		if len(importedPresets.Presets) > 0 {
+			if err := importTheaterSceneOverlayPresets(tx, current.ID, job.ActorUserID, importedPresets.Presets, remap); err != nil {
+				return err
+			}
+			summary.SceneOverlayPresets = len(importedPresets.Presets)
+		}
 		if err := recalculateTheaterResourceReferences(tx, current.ID); err != nil {
 			return err
 		}
 
-		var sceneCount int64
-		if err := tx.Model(&model.TheaterSceneModel{}).Where("room_id = ?", current.ID).Count(&sceneCount).Error; err != nil {
+		roomUpdates := map[string]any{}
+		stateBase := current.StateJSON
+		if len(currentSnapshot.Scenes) == 0 {
+			stateBase = string(defaultJSON(remappedSnapshot.LiveState, `{}`))
+		}
+		var state map[string]any
+		if err := json.Unmarshal([]byte(stateBase), &state); err != nil || state == nil {
+			state = map[string]any{}
+		}
+		state["sceneFolders"] = mergedFolders
+		stateRaw, err := json.Marshal(state)
+		if err != nil {
 			return err
 		}
-		roomUpdates := map[string]any{}
-		if sceneCount == int64(len(remappedSnapshot.Scenes)) && remappedSnapshot.ActiveSceneID != nil {
+		current.StateJSON = string(stateRaw)
+		roomUpdates["state_json"] = string(stateRaw)
+		if len(currentSnapshot.Scenes) == 0 && remappedSnapshot.ActiveSceneID != nil {
 			roomUpdates["active_scene_id"] = *remappedSnapshot.ActiveSceneID
-			roomUpdates["state_json"] = defaultJSON(remappedSnapshot.LiveState, `{}`)
 			current.ActiveSceneID = *remappedSnapshot.ActiveSceneID
-			current.StateJSON = defaultJSON(remappedSnapshot.LiveState, `{}`)
 		}
 
 		if manifest.WorldPresentation != nil {
@@ -467,6 +507,9 @@ func loadAndValidateTheaterPackage(root string) (TheaterPackageManifest, error) 
 	if manifest.WorldPresentation != nil {
 		files = append(files, *manifest.WorldPresentation)
 	}
+	if manifest.SceneOverlayPresets != nil {
+		files = append(files, *manifest.SceneOverlayPresets)
+	}
 	for _, resource := range manifest.Resources {
 		files = append(files, resource.Original)
 		for _, variant := range resource.Variants {
@@ -504,6 +547,62 @@ func loadAndValidateTheaterPackage(root string) (TheaterPackageManifest, error) 
 		}
 	}
 	return manifest, nil
+}
+
+func importTheaterSceneOverlayPresets(tx *gorm.DB, roomID, actorID string, presets []TheaterSceneOverlayPreset, remap theaterPackageRemap) error {
+	var existing int64
+	if err := tx.Model(&model.TheaterSceneOverlayPresetModel{}).Where("room_id = ?", roomID).Count(&existing).Error; err != nil {
+		return err
+	}
+	if existing+int64(len(presets)) > theaterSceneOverlayPresetMaxCount {
+		return newTheaterError(TheaterErrorLimitExceeded, "导入后场景预设数量超限", 409, nil)
+	}
+	for _, source := range presets {
+		input := TheaterSceneOverlayPresetInput{Name: source.Name, Description: source.Description, Tags: source.Tags, Overlays: source.Overlays}
+		for index := range input.Overlays {
+			if media := input.Overlays[index].Media; media != nil {
+				mapped := remap.resources[media.ResourceID]
+				if mapped == "" {
+					return fmt.Errorf("场景预设引用未打包资源: %s", media.ResourceID)
+				}
+				media.ResourceID = mapped
+			}
+		}
+		normalized, tagsJSON, overlaysJSON, err := normalizeTheaterSceneOverlayPresetInput(input)
+		if err != nil {
+			return err
+		}
+		name := normalized.Name
+		for suffix := 0; ; suffix++ {
+			candidate := name
+			if suffix > 0 {
+				base := name
+				if len([]rune(base)) > 110 {
+					base = string([]rune(base)[:110])
+				}
+				candidate = name + "（导入" + func() string {
+					if suffix == 1 {
+						return ""
+					}
+					return " " + strconv.Itoa(suffix)
+				}() + "）"
+				candidate = base + strings.TrimPrefix(candidate, name)
+			}
+			var count int64
+			if err := tx.Model(&model.TheaterSceneOverlayPresetModel{}).Where("room_id = ? AND name = ?", roomID, candidate).Count(&count).Error; err != nil {
+				return err
+			}
+			if count == 0 {
+				normalized.Name = candidate
+				break
+			}
+		}
+		row := &model.TheaterSceneOverlayPresetModel{RoomID: roomID, Name: normalized.Name, Description: normalized.Description, TagsJSON: tagsJSON, OverlaysJSON: overlaysJSON, Revision: 1, CreatedBy: actorID, UpdatedBy: actorID}
+		if err := tx.Create(row).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateTheaterPackageManifestEntities(manifest TheaterPackageManifest) error {
@@ -729,7 +828,8 @@ func importTheaterPackageAttachment(tx *gorm.DB, root string, item TheaterPackag
 func remapTheaterPackageSnapshot(snapshot TheaterSharedSnapshot, remap theaterPackageRemap) (TheaterSharedSnapshot, []string, error) {
 	warnings := []string{}
 	result := TheaterSharedSnapshot{
-		Scenes: map[string]TheaterSceneSnapshot{}, PersistentObjects: map[string]TheaterObjectSnapshot{},
+		SceneFolders: remapTheaterSceneFolders(snapshot.SceneFolders, remap.folders),
+		Scenes:       map[string]TheaterSceneSnapshot{}, PersistentObjects: map[string]TheaterObjectSnapshot{},
 		Characters: map[string]TheaterObjectSnapshot{}, Resources: map[string]TheaterResourcePublic{},
 	}
 	if snapshot.ActiveSceneID != nil {
@@ -755,7 +855,11 @@ func remapTheaterPackageSnapshot(snapshot TheaterSharedSnapshot, remap theaterPa
 		if sceneChanged {
 			warnings = appendWarning(warnings, "部分世界、频道或身份引用已按目标世界重写")
 		}
-		newScene := TheaterSceneSnapshot{ID: newID, Name: scene.Name, SwitchText: scene.SwitchText, Order: scene.Order, Locked: scene.Locked, State: state, Objects: map[string]TheaterObjectSnapshot{}}
+		folderID := ""
+		if scene.FolderID != "" {
+			folderID = remap.folders[scene.FolderID]
+		}
+		newScene := TheaterSceneSnapshot{ID: newID, Name: scene.Name, SwitchText: scene.SwitchText, Order: scene.Order, FolderID: folderID, Locked: scene.Locked, Published: scene.Published, State: state, Objects: map[string]TheaterObjectSnapshot{}}
 		for objectID, object := range scene.Objects {
 			mapped, objectChanged, err := remapTheaterPackageObject(object, remap)
 			if err != nil {
@@ -782,6 +886,78 @@ func remapTheaterPackageSnapshot(snapshot TheaterSharedSnapshot, remap theaterPa
 		}
 	}
 	return result, warnings, nil
+}
+
+func remapTheaterSceneFolders(folders []TheaterSceneFolder, ids map[string]string) []TheaterSceneFolder {
+	result := make([]TheaterSceneFolder, 0, len(folders))
+	for _, folder := range folders {
+		id := ids[folder.ID]
+		if id == "" {
+			continue
+		}
+		result = append(result, TheaterSceneFolder{ID: id, Name: strings.TrimSpace(folder.Name)})
+	}
+	return result
+}
+
+func mergeTheaterSceneFolders(existing, imported []TheaterSceneFolder) ([]TheaterSceneFolder, map[string]string) {
+	result := append([]TheaterSceneFolder(nil), existing...)
+	usedIDs := make(map[string]struct{}, len(result))
+	usedNames := make(map[string]struct{}, len(result))
+	for _, folder := range result {
+		usedIDs[folder.ID] = struct{}{}
+		usedNames[folder.Name] = struct{}{}
+	}
+	remap := make(map[string]string, len(imported))
+	for _, folder := range imported {
+		id := folder.ID
+		if id == "" {
+			continue
+		}
+		if _, exists := usedIDs[id]; exists {
+			id = utils.NewID()
+			for {
+				if _, exists := usedIDs[id]; !exists {
+					break
+				}
+				id = utils.NewID()
+			}
+		}
+		name := strings.TrimSpace(folder.Name)
+		if name == "" {
+			continue
+		}
+		if _, exists := usedNames[name]; exists {
+			base := name
+			for suffix := 1; ; suffix++ {
+				label := " (导入)"
+				if suffix > 1 {
+					label = fmt.Sprintf(" (导入 %d)", suffix)
+				}
+				maxBase := theaterMaxSceneFolderName - len([]rune(label))
+				if maxBase < 1 {
+					maxBase = 1
+				}
+				candidate := string([]rune(base)[:minTheaterInt(len([]rune(base)), maxBase)]) + label
+				if _, taken := usedNames[candidate]; !taken {
+					name = candidate
+					break
+				}
+			}
+		}
+		usedIDs[id] = struct{}{}
+		usedNames[name] = struct{}{}
+		result = append(result, TheaterSceneFolder{ID: id, Name: name})
+		remap[folder.ID] = id
+	}
+	return result, remap
+}
+
+func minTheaterInt(left, right int) int {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 func remapTheaterPackageObject(object TheaterObjectSnapshot, remap theaterPackageRemap) (TheaterObjectSnapshot, bool, error) {
@@ -827,8 +1003,8 @@ func remapTheaterPackageJSON(raw []byte, remap theaterPackageRemap) (json.RawMes
 		"identityId": {}, "identityVariantId": {}, "characterId": {}, "targetUserId": {},
 		"ownerUserId": {}, "userId": {},
 	}
-	var walk func(any) any
-	walk = func(current any) any {
+	var walk func(any, bool) any
+	walk = func(current any, sceneOverlayBinding bool) any {
 		switch typed := current.(type) {
 		case map[string]any:
 			for key, child := range typed {
@@ -846,9 +1022,14 @@ func remapTheaterPackageJSON(raw []byte, remap theaterPackageRemap) (json.RawMes
 					case "sceneId":
 						knownReference = true
 						mapped = remap.scenes[text]
-					case "objectId", "parentId", "effectId":
+					case "objectId", "parentId":
 						knownReference = true
 						mapped = remap.objects[text]
+					case "effectId":
+						if !sceneOverlayBinding {
+							knownReference = true
+							mapped = remap.objects[text]
+						}
 					case "resourceId", "posterResourceId":
 						knownReference = true
 						mapped = remap.resources[text]
@@ -885,20 +1066,20 @@ func remapTheaterPackageJSON(raw []byte, remap theaterPackageRemap) (json.RawMes
 					}
 					continue
 				}
-				typed[key] = walk(child)
+				typed[key] = walk(child, key == "sceneOverlays")
 			}
 			canonicalizeImportedTheaterResourceURL(typed, remap)
 			return typed
 		case []any:
 			for index, child := range typed {
-				typed[index] = walk(child)
+				typed[index] = walk(child, sceneOverlayBinding)
 			}
 			return typed
 		default:
 			return current
 		}
 	}
-	value = walk(value)
+	value = walk(value, false)
 	result, err := json.Marshal(value)
 	return result, changed, err
 }

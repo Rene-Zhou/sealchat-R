@@ -4,10 +4,12 @@ import {
   createDefaultStageSceneTransition,
   isStageActionTarget,
   isSafeStageImageUrl,
+  normalizeStageIframeContent,
   normalizeStageImageAnnotation,
   normalizeStageEntranceConfig,
   normalizeStageAudioRef,
   normalizeStageMusicSnapshot,
+  normalizeStageSceneOverlays,
   normalizeStageSceneTransition,
   normalizeStageActionSchedule,
   normalizeStageSurfaceStyle,
@@ -23,6 +25,8 @@ import {
   type StageObjectTransform,
   type StageObjectType,
   type StageScene,
+  type StageSceneOverlayBinding,
+  type SceneFolder,
   type StageSceneTransition,
   type StageSurfaceStylePatch,
   type StageSurfaceTarget,
@@ -61,7 +65,7 @@ const newObjectOffsets = [
   { x: -2, y: -1.5 },
   { x: 2, y: 1.5 },
 ] as const
-const stageObjectTypes: StageObjectType[] = ['group', 'drawing', 'text', 'image', 'button', 'character', 'video', 'effect']
+const stageObjectTypes: StageObjectType[] = ['group', 'drawing', 'text', 'image', 'button', 'character', 'video', 'effect', 'iframe']
 type StageInsertableObjectType = Exclude<StageObjectType, 'drawing'>
 
 const snapStageCoordinate = (value: number, fieldSize: number, gridSize: number) => {
@@ -126,10 +130,25 @@ const snapObjectToGrid = (
   object: StageObject,
   liveState: StageLiveState,
   objects: Record<string, StageObject>,
+  anchor: 'center' | 'bounds' = 'center',
 ) => {
   // Effects use an independent 1920x1080 design canvas, not world coordinates.
   if (!liveState.alignWithGrid || object.type === 'effect') return
   const world = objectWorldPosition(object, objects)
+  if (anchor === 'bounds' && object.type !== 'group') {
+    const angle = object.transform.rotation * Math.PI / 180
+    const halfWidth = Math.max(0.5, object.transform.width) * Math.abs(object.transform.scaleX || 1) / 2
+    const halfHeight = Math.max(0.5, object.transform.height) * Math.abs(object.transform.scaleY || 1) / 2
+    const extentX = Math.abs(Math.cos(angle)) * halfWidth + Math.abs(Math.sin(angle)) * halfHeight
+    const extentY = Math.abs(Math.sin(angle)) * halfWidth + Math.abs(Math.cos(angle)) * halfHeight
+    const left = world.x - extentX
+    const top = world.y - extentY
+    setObjectWorldPosition(object, objects, {
+      x: world.x + snapStageCoordinate(left, liveState.fieldWidth, liveState.gridSize) - left,
+      y: world.y + snapStageCoordinate(top, liveState.fieldHeight, liveState.gridSize) - top,
+    })
+    return
+  }
   setObjectWorldPosition(object, objects, {
     x: snapStageCoordinate(world.x, liveState.fieldWidth, liveState.gridSize),
     y: snapStageCoordinate(world.y, liveState.fieldHeight, liveState.gridSize),
@@ -187,8 +206,8 @@ const makeObject = (
   transform: {
     x: type === 'effect' ? 960 : newObjectOffsets[order % newObjectOffsets.length].x,
     y: type === 'effect' ? 540 : newObjectOffsets[order % newObjectOffsets.length].y,
-    width: type === 'effect' ? 1600 : type === 'group' ? 12 : type === 'image' ? 9 : 7,
-    height: type === 'effect' ? 900 : type === 'group' ? 8 : type === 'image' ? 6 : 4.5,
+    width: type === 'effect' ? 1600 : type === 'group' ? 12 : type === 'iframe' ? 16 : type === 'image' ? 9 : 7,
+    height: type === 'effect' ? 900 : type === 'group' ? 8 : type === 'iframe' ? 9 : type === 'image' ? 6 : 4.5,
     rotation: 0,
     scaleX: 1,
     scaleY: 1,
@@ -197,12 +216,16 @@ const makeObject = (
   },
   visible: true,
   locked: false,
-  aspectRatioLocked: type === 'text' ? false : type !== 'effect',
+  aspectRatioLocked: type === 'text' || type === 'iframe' ? false : type !== 'effect',
   interactive: type !== 'effect' && type !== 'group',
   editable: false,
   fill: type === 'text' ? '#ffffff' : palette[order % palette.length],
   text: type === 'text' ? name : undefined,
-  content: type === 'effect' ? { effect: createDefaultTheaterEffectConfig() } : {},
+  content: type === 'effect'
+    ? { effect: createDefaultTheaterEffectConfig() }
+    : type === 'iframe'
+      ? { iframe: normalizeStageIframeContent(null) }
+      : {},
   metadata: type === 'text'
     ? { textEditorMode: 'plain', entrance: normalizeStageEntranceConfig(null) }
     : type === 'image'
@@ -224,12 +247,14 @@ const createLiveState = (color: string, sceneObjects: Record<string, StageObject
   fieldHeight: 24,
   fieldObjectFit: 'cover',
   displayGrid: false,
+  gridOnTop: false,
   gridSize: 1,
   alignWithGrid: false,
   sceneObjects,
   transition: createDefaultStageSceneTransition(),
   switchAudio: null,
   musicSnapshot: null,
+  sceneOverlays: [],
 })
 
 const createScene = (name: string, order: number, color: string): StageScene => {
@@ -243,6 +268,7 @@ const createScene = (name: string, order: number, color: string): StageScene => 
     switchText: '',
     order,
     locked: false,
+    published: false,
     state: createLiveState(color, {
       [title.id]: title,
     }),
@@ -256,6 +282,7 @@ export const createInitialTheaterStageState = (): StageWorkspaceState => {
     activeSceneId: opening.id,
     liveState: clone(opening.state),
     scenes: { [opening.id]: opening, [tavern.id]: tavern },
+    sceneFolders: [],
     persistentObjects: {},
     camera: { x: 0, y: 0, zoom: 0.5 },
     selectedObjectId: null,
@@ -382,7 +409,7 @@ const normalizeObject = (input: StageObject): StageObject | null => {
     parentId: typeof input.parentId === 'string' ? input.parentId : null,
     visible: input.visible !== false,
     locked: input.locked === true,
-    aspectRatioLocked: input.aspectRatioLocked !== false,
+    aspectRatioLocked: input.type === 'iframe' ? input.aspectRatioLocked === true : input.aspectRatioLocked !== false,
     interactive: input.type === 'group' ? false : input.interactive !== false,
     editable: input.type === 'group' ? false : input.editable === true,
     fill: input.type === 'text' ? '#ffffff' : typeof input.fill === 'string' ? input.fill : '#60a5fa',
@@ -396,6 +423,8 @@ const normalizeObject = (input: StageObject): StageObject | null => {
           ...(input.content && typeof input.content === 'object' ? input.content : {}),
           effect: normalizeTheaterEffectConfig(input.content?.effect),
         }
+      : input.type === 'iframe'
+        ? { iframe: normalizeStageIframeContent(input.content?.iframe) }
       : input.content && typeof input.content === 'object' ? input.content : {},
     actions: input.type === 'group' ? [] : normalizeActions(input.actions),
     metadata: input.type === 'text'
@@ -431,6 +460,7 @@ const normalizeLiveState = (input: Partial<StageLiveState> | undefined, fallback
     ? input.fieldObjectFit
     : 'cover',
   displayGrid: input?.displayGrid === true,
+  gridOnTop: input?.gridOnTop === true,
   gridSize: typeof input?.gridSize === 'number' && input.gridSize > 0 ? input.gridSize : 1,
   alignWithGrid: input?.alignWithGrid === true,
   sceneObjects: normalizeObjects(input?.sceneObjects),
@@ -441,6 +471,7 @@ const normalizeLiveState = (input: Partial<StageLiveState> | undefined, fallback
   musicSnapshot: normalizeStageMusicSnapshot(input && Object.prototype.hasOwnProperty.call(input, 'musicSnapshot')
     ? input.musicSnapshot
     : input?.serverState?.musicSnapshot),
+  sceneOverlays: normalizeStageSceneOverlays(input?.sceneOverlays),
   serverState: input?.serverState && typeof input.serverState === 'object' ? input.serverState : {},
 })
 
@@ -466,6 +497,12 @@ export interface TheaterStageStore {
   updateSceneTransition: (sceneId: string, transition: StageSceneTransition) => boolean
   updateSceneSwitchAudio: (sceneId: string, audio: StageAudioRef | null) => boolean
   updateSceneMusicSnapshot: (sceneId: string, snapshot: StageMusicSnapshot | null) => boolean
+  updateSceneOverlays: (sceneId: string, overlays: StageSceneOverlayBinding[]) => boolean
+  createSceneFolder: (name: string) => SceneFolder | null
+  renameSceneFolder: (folderId: string, name: string) => boolean
+  deleteSceneFolder: (folderId: string) => boolean
+  moveSceneToFolder: (sceneId: string, folderId: string | null) => boolean
+  setScenePublished: (sceneId: string, published: boolean) => boolean
   reorderScenes: (sceneId: string, targetId: string, placement: 'before' | 'after') => boolean
   addObject: (type: StageInsertableObjectType, scope?: StageObjectScope) => StageObject
   addDrawing: (
@@ -764,6 +801,64 @@ export const createTheaterStageStore = (_storageKey?: string): TheaterStageStore
     return true
   }
 
+  const updateSceneOverlays = (sceneId: string, overlays: StageSceneOverlayBinding[]) => {
+    const scene = state.scenes[sceneId]
+    if (!scene) return false
+    const normalized = normalizeStageSceneOverlays(overlays)
+    if (JSON.stringify(scene.state.sceneOverlays) === JSON.stringify(normalized)) return false
+    scene.state.sceneOverlays = normalized
+    if (sceneId === state.activeSceneId) state.liveState.sceneOverlays = clone(normalized)
+    return true
+  }
+
+  const createSceneFolder = (name: string): SceneFolder | null => {
+    const normalized = name.trim()
+    if (!normalized || [...normalized].length > 128) return null
+    if (state.sceneFolders.length >= 200) return null
+    if (state.sceneFolders.some((folder) => folder.name === normalized)) return null
+    const folder: SceneFolder = { id: uid('scene-folder'), name: normalized }
+    state.sceneFolders.push(folder)
+    return folder
+  }
+
+  const renameSceneFolder = (folderId: string, name: string) => {
+    const folder = state.sceneFolders.find((item) => item.id === folderId)
+    const normalized = name.trim()
+    if (!folder || !normalized || [...normalized].length > 128) return false
+    if (folder.name === normalized) return false
+    if (state.sceneFolders.some((item) => item.id !== folderId && item.name === normalized)) return false
+    folder.name = normalized
+    return true
+  }
+
+  const deleteSceneFolder = (folderId: string) => {
+    const index = state.sceneFolders.findIndex((item) => item.id === folderId)
+    if (index < 0) return false
+    state.sceneFolders.splice(index, 1)
+    Object.values(state.scenes).forEach((scene) => {
+      if (scene.folderId === folderId) delete scene.folderId
+    })
+    return true
+  }
+
+  const moveSceneToFolder = (sceneId: string, folderId: string | null) => {
+    const scene = state.scenes[sceneId]
+    const normalized = folderId?.trim() || ''
+    if (!scene) return false
+    if (normalized && !state.sceneFolders.some((folder) => folder.id === normalized)) return false
+    if ((scene.folderId || '') === normalized) return false
+    if (normalized) scene.folderId = normalized
+    else delete scene.folderId
+    return true
+  }
+
+  const setScenePublished = (sceneId: string, published: boolean) => {
+    const scene = state.scenes[sceneId]
+    if (!scene || scene.published === published) return false
+    scene.published = published
+    return true
+  }
+
   const reorderScenes = (sceneId: string, targetId: string, placement: 'before' | 'after') => {
     if (sceneId === targetId) return false
     const ordered = [...scenes.value]
@@ -815,6 +910,7 @@ export const createTheaterStageStore = (_storageKey?: string): TheaterStageStore
       id: sceneId,
       name: `${source.name} 副本`,
       order: scenes.value.reduce((highest, item) => Math.max(highest, item.order), -1) + 1,
+      published: false,
       state: { ...clone(source.state), sceneObjects: objects },
     }
     state.scenes[scene.id] = scene
@@ -878,15 +974,17 @@ export const createTheaterStageStore = (_storageKey?: string): TheaterStageStore
             ? '新建图片'
             : type === 'button'
               ? '新建按钮'
-              : type === 'effect'
-                ? '新建特效'
-                : '新建对象',
+              : type === 'iframe'
+                ? '新建网页'
+                : type === 'effect'
+                  ? '新建特效'
+                  : '新建对象',
       type,
       Object.keys(objects).length,
     )
     objects[object.id] = object
     placeObjectAbove(object, objects)
-    snapObjectToGrid(object, state.liveState, activeObjects.value)
+    snapObjectToGrid(object, state.liveState, activeObjects.value, 'bounds')
     setSelectedObjectIds([object.id], object.id)
     return object
   })
@@ -917,7 +1015,6 @@ export const createTheaterStageStore = (_storageKey?: string): TheaterStageStore
     })
     objects[object.id] = object
     placeObjectAbove(object, objects)
-    snapObjectToGrid(object, state.liveState, activeObjects.value)
     setSelectedObjectIds([object.id], object.id)
     return object
   })
@@ -1364,6 +1461,15 @@ export const createTheaterStageStore = (_storageKey?: string): TheaterStageStore
     const effectConfig = object.type === 'effect'
       ? normalizeTheaterEffectConfig(object.content?.effect)
       : null
+    const initializeImageFrame = Boolean(
+      object.type === 'image'
+      && !object.image
+      && dimensions
+      && Number.isFinite(dimensions.width)
+      && Number.isFinite(dimensions.height)
+      && dimensions.width > 0
+      && dimensions.height > 0,
+    )
     const initializeMediaFrame = Boolean(
       effectConfig?.kind === 'media'
       && !object.image
@@ -1376,6 +1482,24 @@ export const createTheaterStageStore = (_storageKey?: string): TheaterStageStore
     )
     object.image = image
     if (object.type === 'image') {
+      if (initializeImageFrame && dimensions) {
+        const frameWidth = Math.max(0.5, object.transform.width)
+        const frameHeight = Math.max(0.5, object.transform.height)
+        const scale = Math.min(frameWidth / dimensions.width, frameHeight / dimensions.height)
+        object.transform = {
+          ...object.transform,
+          width: Number(Math.max(0.5, dimensions.width * scale).toFixed(6)),
+          height: Number(Math.max(0.5, dimensions.height * scale).toFixed(6)),
+        }
+        // Initial frame fitting is setup state; keep it out of object edit history.
+        const beforeObject = state.persistentObjects[object.id]
+          ? transaction?.before.persistentObjects[object.id]
+          : transaction?.before.sceneObjects[object.id]
+        if (beforeObject) {
+          beforeObject.transform.width = object.transform.width
+          beforeObject.transform.height = object.transform.height
+        }
+      }
       object.content = { ...object.content, image }
     } else if (effectConfig) {
       effectConfig.media = image
@@ -1472,11 +1596,16 @@ export const createTheaterStageStore = (_storageKey?: string): TheaterStageStore
   const replaceState = (next: StageWorkspaceState) => {
     transaction = null
     const value = clone(next)
+    value.sceneFolders = Array.isArray(value.sceneFolders)
+      ? value.sceneFolders.filter((folder) => folder && typeof folder.id === 'string' && typeof folder.name === 'string' && folder.id.trim() && folder.name.trim())
+        .map((folder) => ({ id: folder.id.trim(), name: folder.name.trim() }))
+      : []
     // Remote member snapshots contain only the incoming active scene. Install
     // scene metadata before changing activeSceneId, while keeping the outgoing
     // liveState mounted long enough for the synchronous transition watcher to
     // capture its visual state and build the incoming media readiness batch.
     state.scenes = value.scenes
+    state.sceneFolders = value.sceneFolders
     state.persistentObjects = value.persistentObjects
     state.activeSceneId = value.activeSceneId
     state.liveState = value.liveState
@@ -1510,6 +1639,12 @@ export const createTheaterStageStore = (_storageKey?: string): TheaterStageStore
     updateSceneTransition,
     updateSceneSwitchAudio,
     updateSceneMusicSnapshot,
+    updateSceneOverlays,
+    createSceneFolder,
+    renameSceneFolder,
+    deleteSceneFolder,
+    moveSceneToFolder,
+    setScenePublished,
     reorderScenes,
     addScene,
     duplicateScene,

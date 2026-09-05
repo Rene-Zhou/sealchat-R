@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, toRaw, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWindowSize } from '@vueuse/core'
 import { NButton, NIcon, useMessage } from 'naive-ui'
@@ -9,15 +9,33 @@ import { useAudioStudioStore } from '@/stores/audioStudio'
 import { useUserStore } from '@/stores/user'
 import StageApp from '../stage/StageApp.vue'
 import { createTheaterStageStore } from '../stage/StageStore'
-import { mergeTheaterBridgePermissions, TheaterHostBridge } from '../bridge/TheaterHostBridge'
+import {
+  mergeTheaterBridgePermissions,
+  TheaterHostBridge,
+  type TheaterChatBridgeStatus,
+} from '../bridge/TheaterHostBridge'
 import { createTheaterBridgeId } from '../bridge/theater-bridge-protocol'
-import type { ChatCharactersSnapshotPayload } from '../bridge/theater-bridge-protocol'
+import type { ChatCharactersSnapshotPayload, TheaterDialogueMessagePayload } from '../bridge/theater-bridge-protocol'
 import { TheaterSyncClient } from '../sync/TheaterSyncClient'
-import { stageMusicSnapshotHasContent, type StagePointerTraceInput } from '../shared/stage-types'
-import { TheaterDialogueRuntime } from '../dialogue/theater-dialogue-runtime'
+import { normalizeStageIframeContent, stageMusicSnapshotHasContent, type StagePointerTraceInput } from '../shared/stage-types'
+import {
+  hasTheaterDialoguePerformanceContent,
+  TheaterDialogueRuntime,
+  type TheaterDialogueRuntimeSnapshot,
+} from '../dialogue/theater-dialogue-runtime'
+import {
+  THEATER_DIALOGUE_SURFACE_MESSAGE_TYPES,
+  isTheaterDialogueSurfaceCommandMessage,
+  isTheaterDialogueSurfaceDisposeMessage,
+  isTheaterDialogueSurfaceReadyMessage,
+  parseTheaterDialogueSurfaceUrl,
+  type TheaterDialogueSurfaceContext,
+} from '../dialogue/theater-dialogue-surface'
 import { theaterPresentationSchema, type TheaterPresentation } from '@/types/theaterPresentation'
 import type { TheaterEditorCommand, TheaterSection, TheaterSelection } from '@/components/theater-presentation/theaterPresentationEditorState'
 import DiceOverlayLoader from '@/features/dice3d/components/DiceOverlayLoader.vue'
+import TheaterFloatingHost from './TheaterFloatingHost.vue'
+import type { TheaterFloatingResource } from '@/utils/theaterFloatingBridge'
 import { dice3dRuntime, isDice3DTheaterMessage } from '@/features/dice3d/runtime'
 import { useDisplayStore } from '@/stores/display'
 import { activateWorldTheater, isTheaterActivationRequired } from '@/services/theaterActivation'
@@ -48,6 +66,7 @@ installTheaterBridgeDebugConsoleCommand()
 const layoutRef = ref<HTMLDivElement | null>(null)
 const iframeRef = ref<HTMLIFrameElement | null>(null)
 const stageAppRef = ref<InstanceType<typeof StageApp> | null>(null)
+const theaterFloatingHostRef = ref<InstanceType<typeof TheaterFloatingHost> | null>(null)
 const stageSurfaceRef = ref<HTMLElement | null>(null)
 const splitRatio = ref(0.7)
 const splitDragging = ref(false)
@@ -57,6 +76,7 @@ const isNarrow = computed(() => width.value < 840)
 const chatVisible = computed(() => isNarrow.value ? mobileTab.value === 'chat' : !chatHidden.value)
 const theaterDividerWidth = 7
 const chatBridgeOnline = ref(false)
+const chatBridgeStatus = ref<TheaterChatBridgeStatus>('connecting')
 const theaterSyncing = ref(false)
 const theaterSyncReady = ref(false)
 const theaterPermissions = ref<string[]>([])
@@ -109,8 +129,16 @@ const characterSnapshot = ref<ChatCharactersSnapshotPayload>({
   characters: [],
 })
 let theaterBridge: TheaterHostBridge | null = null
+let theaterBridgeGeneration = 0
 let theaterSync: TheaterSyncClient | null = null
 let theaterSyncGeneration = 0
+const dialogueSurfaceTargets = new Map<Window, TheaterDialogueSurfaceContext>()
+interface DialogueSurfaceRuntimeEntry {
+  runtime: TheaterDialogueRuntime
+  unsubscribe: () => void
+}
+const dialogueSurfaceRuntimes = new Map<string, DialogueSurfaceRuntimeEntry>()
+let dialogueSurfaceModeActive = false
 const theaterActivationVisible = ref(false)
 const theaterActivationCode = ref('')
 const theaterActivationError = ref('')
@@ -249,14 +277,13 @@ const selectChatCharacterVariant = async (payload: { identityId: string, variant
   }
 }
 
-const openCharacterCard = async (identityId: string) => {
-  chatHidden.value = false
-  if (isNarrow.value) mobileTab.value = 'chat'
-  try {
-    const result = await theaterBridge?.openCharacterCard(identityId)
-    if (result && !result.ok) message.warning(result.error.message)
-  } catch (error) {
-    message.warning(error instanceof Error ? error.message : '打开人物卡失败')
+const openCharacterCard = (payload: {
+  resource: TheaterFloatingResource
+  clientX: number
+  clientY: number
+}) => {
+  if (!theaterFloatingHostRef.value?.openResource(payload.resource, payload)) {
+    message.warning('人物卡浮窗打开失败')
   }
 }
 
@@ -276,7 +303,7 @@ const publishTheaterPointerTrace = (trace: StagePointerTraceInput) => {
 
 const sendSceneDialogue = async (sceneId: string) => {
   const scene = stageStore.state.scenes[sceneId]
-  if (!sceneDialogueEnabled.value || !scene?.switchText) return
+  if (chatBridgeStatus.value === 'manual-disconnected' || !sceneDialogueEnabled.value || !scene?.switchText) return
   try {
     const result = await theaterBridge?.sendChatMessage({
       content: scene.switchText,
@@ -304,7 +331,7 @@ const broadcastSceneAudio = async (sceneId: string) => {
 const applySceneMusic = async (sceneId: string) => {
   const scene = stageStore.state.scenes[sceneId]
   const snapshot = scene?.state.musicSnapshot
-  if (!scene || !stageMusicSnapshotHasContent(snapshot) || !theaterBridge) return
+  if (chatBridgeStatus.value === 'manual-disconnected' || !scene || !stageMusicSnapshotHasContent(snapshot) || !theaterBridge) return
   try {
     const result = await theaterBridge.applyChatAudioPlaybackSnapshot({
       sceneId,
@@ -356,7 +383,7 @@ const clearSceneMusic = async (sceneId: string) => {
 const requestSceneSwitch = (sceneId: string) => {
   if (constructionSceneId.value && !isWorldAdmin.value && sceneId !== constructionSceneId.value) return
   if (!stageStore.applyScene(sceneId)) return
-  void runSceneSwitchSideEffects(sceneId)
+  if (theaterPermissions.value.includes('stage.scene.switch')) void runSceneSwitchSideEffects(sceneId)
 }
 
 const canFollowSceneSwitch = () => !constructionSceneId.value || isWorldAdmin.value
@@ -393,6 +420,267 @@ const emptyCharacterSnapshot = (): ChatCharactersSnapshotPayload => ({
   characters: [],
 })
 
+const dialogueSurfaceContextMatches = (context: TheaterDialogueSurfaceContext) => (
+  context.worldId === worldId.value && context.channelId === channelId.value
+)
+
+const findDialogueSurfaceFrame = (
+  source: MessageEventSource | null,
+  identityId = '',
+): { target: Window; context: TheaterDialogueSurfaceContext } | null => {
+  if (!source) return null
+  const frames = stageSurfaceRef.value?.querySelectorAll<HTMLIFrameElement>('.theater-iframe-visual-object__frame') || []
+  for (const frame of frames) {
+    const target = frame.contentWindow
+    if (!target || target !== source) continue
+    const context = parseTheaterDialogueSurfaceUrl(frame.src)
+    if (!context || !dialogueSurfaceContextMatches(context) || (identityId && context.identityId !== identityId)) return null
+    return { target, context }
+  }
+  return null
+}
+
+const postDialogueSurfaceRuntime = (
+  target: Window,
+  context: TheaterDialogueSurfaceContext,
+  snapshot: TheaterDialogueRuntimeSnapshot,
+) => {
+  target.postMessage({
+    type: THEATER_DIALOGUE_SURFACE_MESSAGE_TYPES.runtime,
+    ...context,
+    sessionId,
+    snapshot: toRaw(snapshot),
+  }, window.location.origin)
+}
+
+const postDialogueSurfaceCharacters = (
+  target: Window,
+  context: TheaterDialogueSurfaceContext,
+  snapshot = characterSnapshot.value,
+) => {
+  target.postMessage({
+    type: THEATER_DIALOGUE_SURFACE_MESSAGE_TYPES.characters,
+    ...context,
+    sessionId,
+    snapshot: toRaw(snapshot),
+  }, window.location.origin)
+}
+
+const forEachDialogueSurface = (visit: (target: Window, context: TheaterDialogueSurfaceContext) => void) => {
+  for (const [target, registration] of dialogueSurfaceTargets) {
+    const current = findDialogueSurfaceFrame(target, registration.identityId)
+    if (!current) {
+      dialogueSurfaceTargets.delete(target)
+      continue
+    }
+    visit(current.target, current.context)
+  }
+}
+
+const getConfiguredDialogueSurfaceIdentityIds = () => {
+  const identityIds = new Set<string>()
+  for (const object of Object.values(stageStore.activeObjects.value)) {
+    if (object.type !== 'iframe') continue
+    const context = parseTheaterDialogueSurfaceUrl(normalizeStageIframeContent(object.content?.iframe).url)
+    if (context && dialogueSurfaceContextMatches(context)) identityIds.add(context.identityId)
+  }
+  return identityIds
+}
+
+const isStageObjectEffectivelyVisible = (objectId: string) => {
+  const objects = stageStore.activeObjects.value
+  let current = objects[objectId]
+  const visited = new Set<string>()
+
+  while (current) {
+    if (!current.visible) return false
+    if (!current.parentId) return true
+    if (visited.has(current.id)) return false
+    visited.add(current.id)
+    current = objects[current.parentId]
+  }
+
+  return false
+}
+
+const hasRenderableDialogueSurfaceForIdentity = (identityId: string | null) => {
+  if (!identityId) return false
+  const objects = stageStore.activeObjects.value
+  for (const object of Object.values(objects)) {
+    if (object.type !== 'iframe' || !isStageObjectEffectivelyVisible(object.id)) continue
+    const context = parseTheaterDialogueSurfaceUrl(normalizeStageIframeContent(object.content?.iframe).url)
+    if (context && dialogueSurfaceContextMatches(context) && context.identityId === identityId) return true
+  }
+  return false
+}
+
+const ensureUnrenderedPerformanceDialogueProgressForIdentity = (
+  identityId: string,
+  snapshot?: TheaterDialogueRuntimeSnapshot,
+) => {
+  const entry = dialogueSurfaceRuntimes.get(identityId)
+  if (!entry) return
+  const currentSnapshot = snapshot ?? entry.runtime.getSnapshot()
+  const current = currentSnapshot.queue.current
+  if (
+    !current
+    || currentSnapshot.phase !== 'typing'
+    || !hasTheaterDialoguePerformanceContent(current.message)
+    || hasRenderableDialogueSurfaceForIdentity(identityId)
+  ) return
+  entry.runtime.completeCurrent(current.message.messageId)
+}
+
+const broadcastDialogueRuntimeForIdentity = (
+  identityId: string,
+  snapshot: TheaterDialogueRuntimeSnapshot,
+) => {
+  forEachDialogueSurface((target, context) => {
+    if (context.identityId === identityId) postDialogueSurfaceRuntime(target, context, snapshot)
+  })
+}
+
+const broadcastDialogueCharacters = (snapshot = characterSnapshot.value) => {
+  forEachDialogueSurface((target, context) => postDialogueSurfaceCharacters(target, context, snapshot))
+}
+
+const disposeAllDialogueSurfaceRuntimes = () => {
+  for (const [identityId, entry] of dialogueSurfaceRuntimes) {
+    entry.unsubscribe()
+    entry.runtime.dispose()
+    dialogueSurfaceRuntimes.delete(identityId)
+  }
+}
+
+const reconcileDialogueSurfaceRuntimes = () => {
+  const configuredIdentityIds = getConfiguredDialogueSurfaceIdentityIds()
+  const nextSurfaceMode = configuredIdentityIds.size > 0
+
+  if (nextSurfaceMode !== dialogueSurfaceModeActive) {
+    dialogueRuntime.reset()
+    dialogueSurfaceModeActive = nextSurfaceMode
+    if (!nextSurfaceMode) disposeAllDialogueSurfaceRuntimes()
+  }
+
+  if (!nextSurfaceMode) return
+
+  for (const [identityId, entry] of dialogueSurfaceRuntimes) {
+    if (configuredIdentityIds.has(identityId)) continue
+    entry.unsubscribe()
+    entry.runtime.dispose()
+    dialogueSurfaceRuntimes.delete(identityId)
+  }
+
+  for (const identityId of configuredIdentityIds) {
+    if (dialogueSurfaceRuntimes.has(identityId)) continue
+    const runtime = new TheaterDialogueRuntime()
+    const entry: DialogueSurfaceRuntimeEntry = {
+      runtime,
+      unsubscribe: () => undefined,
+    }
+    dialogueSurfaceRuntimes.set(identityId, entry)
+    entry.unsubscribe = runtime.subscribe((snapshot) => {
+      broadcastDialogueRuntimeForIdentity(identityId, snapshot)
+      ensureUnrenderedPerformanceDialogueProgressForIdentity(identityId, snapshot)
+    })
+  }
+}
+
+const handleDialogueMessageCreated = (payload: TheaterDialogueMessagePayload) => {
+  reconcileDialogueSurfaceRuntimes()
+  if (!dialogueSurfaceModeActive) {
+    dialogueRuntime.created(payload)
+    return
+  }
+  const identityId = payload.actor.identityId
+  if (!identityId) return
+  dialogueSurfaceRuntimes.get(identityId)?.runtime.created(payload)
+}
+
+const handleDialogueMessageUpdated = (payload: TheaterDialogueMessagePayload) => {
+  reconcileDialogueSurfaceRuntimes()
+  if (!dialogueSurfaceModeActive) {
+    dialogueRuntime.updated(payload)
+    return
+  }
+  const identityId = payload.actor.identityId
+  for (const [runtimeIdentityId, entry] of dialogueSurfaceRuntimes) {
+    if (runtimeIdentityId === identityId) entry.runtime.updated(payload)
+    else entry.runtime.removed(payload.messageId)
+  }
+}
+
+const handleDialogueMessageRemoved = (messageId: string) => {
+  reconcileDialogueSurfaceRuntimes()
+  if (!dialogueSurfaceModeActive) {
+    dialogueRuntime.removed(messageId)
+    return
+  }
+  for (const entry of dialogueSurfaceRuntimes.values()) entry.runtime.removed(messageId)
+}
+
+const handleDialogueSurfaceMessage = (event: MessageEvent) => {
+  if (event.origin !== window.location.origin) return
+  if (isTheaterDialogueSurfaceReadyMessage(event.data)) {
+    if (!dialogueSurfaceContextMatches(event.data)) return
+    const surface = findDialogueSurfaceFrame(event.source, event.data.identityId)
+    if (!surface) return
+    reconcileDialogueSurfaceRuntimes()
+    dialogueSurfaceTargets.set(surface.target, surface.context)
+    const entry = dialogueSurfaceRuntimes.get(surface.context.identityId)
+    if (!entry) return
+    postDialogueSurfaceRuntime(surface.target, surface.context, entry.runtime.getSnapshot())
+    postDialogueSurfaceCharacters(surface.target, surface.context)
+    return
+  }
+  if (isTheaterDialogueSurfaceDisposeMessage(event.data)) {
+    if (!dialogueSurfaceContextMatches(event.data)) return
+    for (const [target, registration] of dialogueSurfaceTargets) {
+      if (target === event.source && registration.identityId === event.data.identityId) {
+        dialogueSurfaceTargets.delete(target)
+        break
+      }
+    }
+    return
+  }
+  if (!isTheaterDialogueSurfaceCommandMessage(event.data)) return
+  if (event.data.sessionId !== sessionId || !dialogueSurfaceContextMatches(event.data)) return
+  const surface = findDialogueSurfaceFrame(event.source, event.data.identityId)
+  if (!surface || dialogueSurfaceTargets.get(surface.target)?.identityId !== surface.context.identityId) return
+  reconcileDialogueSurfaceRuntimes()
+  const entry = dialogueSurfaceRuntimes.get(surface.context.identityId)
+  if (!entry) return
+  const runtime = entry.runtime
+  const command = event.data.command
+  if (command.name === 'complete-current') runtime.completeCurrent(command.messageId)
+  else if (command.name === 'skip') runtime.skip()
+  else if (command.name === 'close') runtime.close()
+  else if (command.name === 'set-reduced-motion') runtime.setReducedMotion(command.value)
+  else runtime.setCharactersPerSecond(command.value)
+}
+
+watch(characterSnapshot, snapshot => broadcastDialogueCharacters(snapshot))
+watch(
+  () => stageStore.state.activeSceneId,
+  () => {
+    disposeAllDialogueSurfaceRuntimes()
+    reconcileDialogueSurfaceRuntimes()
+    forEachDialogueSurface(() => undefined)
+  },
+  { flush: 'post' },
+)
+watch(
+  () => stageStore.activeObjects.value,
+  () => {
+    reconcileDialogueSurfaceRuntimes()
+    forEachDialogueSurface(() => undefined)
+    for (const identityId of dialogueSurfaceRuntimes.keys()) {
+      ensureUnrenderedPerformanceDialogueProgressForIdentity(identityId)
+    }
+  },
+  { deep: true, flush: 'post' },
+)
+
 const resolveBridgePermissions = (stagePermissions: readonly string[]) => {
   const memberRole = chat.worldDetailMap[worldId.value]?.memberRole
   const canControlMusic = (memberRole === 'owner' || memberRole === 'admin')
@@ -402,10 +690,15 @@ const resolveBridgePermissions = (stagePermissions: readonly string[]) => {
 
 const startTheaterBridge = () => {
   if (!worldId.value || !channelId.value || typeof window === 'undefined') return
+  const generation = ++theaterBridgeGeneration
+  disposeAllDialogueSurfaceRuntimes()
+  dialogueSurfaceModeActive = false
+  dialogueSurfaceTargets.clear()
   dialogueRuntime.reset()
   theaterBridge?.stop()
   theaterBridge = null
   chatBridgeOnline.value = false
+  chatBridgeStatus.value = 'connecting'
   characterSnapshot.value = emptyCharacterSnapshot()
   const memberRole = chat.worldDetailMap[worldId.value]?.memberRole
   const stagePermissions = theaterPermissions.value.length
@@ -414,7 +707,8 @@ const startTheaterBridge = () => {
       ? ['stage.view', 'stage.scene.switch', 'stage.object.edit', 'stage.action.trigger']
       : ['stage.view', 'stage.object.edit.delegated', 'stage.action.trigger']
   const permissions = resolveBridgePermissions(stagePermissions)
-  theaterBridge = new TheaterHostBridge({
+  let bridge: TheaterHostBridge
+  bridge = new TheaterHostBridge({
     context: { worldId: worldId.value, channelId: channelId.value, sessionId },
     stageStore,
     getChatWindow: () => iframeRef.value?.contentWindow || null,
@@ -422,13 +716,28 @@ const startTheaterBridge = () => {
     userId: user.info?.id ? String(user.info.id) : '',
     permissions,
     debug: () => import.meta.env.DEV || route.query.bridgeDebug === '1' || isTheaterBridgeDebugEnabled(),
-    onChatOnlineChange: (online) => { chatBridgeOnline.value = online },
-    onCharacterSnapshotChange: (snapshot) => { characterSnapshot.value = snapshot },
-    onChatMessageCreated: dialogueRuntime.created,
-    onChatMessageUpdated: dialogueRuntime.updated,
-    onChatMessageRemoved: ({ messageId }) => dialogueRuntime.removed(messageId),
+    onChatOnlineChange: (online) => {
+      if (generation === theaterBridgeGeneration && theaterBridge === bridge) chatBridgeOnline.value = online
+    },
+    onChatBridgeStatusChange: (status) => {
+      if (generation === theaterBridgeGeneration && theaterBridge === bridge) chatBridgeStatus.value = status
+    },
+    onCharacterSnapshotChange: (snapshot) => {
+      if (generation === theaterBridgeGeneration && theaterBridge === bridge) characterSnapshot.value = snapshot
+    },
+    onChatMessageCreated: payload => {
+      if (generation === theaterBridgeGeneration && theaterBridge === bridge) handleDialogueMessageCreated(payload)
+    },
+    onChatMessageUpdated: payload => {
+      if (generation === theaterBridgeGeneration && theaterBridge === bridge) handleDialogueMessageUpdated(payload)
+    },
+    onChatMessageRemoved: ({ messageId }) => {
+      if (generation === theaterBridgeGeneration && theaterBridge === bridge) handleDialogueMessageRemoved(messageId)
+    },
     onSceneApplied: (sceneId) => {
-      void runSceneSwitchSideEffects(sceneId)
+      if (generation === theaterBridgeGeneration && theaterBridge === bridge) {
+        void runSceneSwitchSideEffects(sceneId)
+      }
     },
     triggerStageAction: async (payload) => {
       if (!theaterSync) return false
@@ -459,9 +768,25 @@ const startTheaterBridge = () => {
     },
     playStageEffect: (effectId, triggerId) => stageAppRef.value?.playEffect(effectId, triggerId) === true,
   })
-  void theaterBridge.start().catch((error) => {
+  theaterBridge = bridge
+  void bridge.start().catch((error) => {
+    if (generation === theaterBridgeGeneration && theaterBridge === bridge) chatBridgeStatus.value = 'error'
     console.warn('[theater-bridge] host startup failed', error)
   })
+}
+
+const disconnectTheaterChatBridge = () => {
+  dialogueRuntime.close()
+  for (const entry of dialogueSurfaceRuntimes.values()) entry.runtime.close()
+  theaterBridge?.disconnectChatBridge()
+}
+
+const reconnectTheaterChatBridge = () => {
+  try {
+    theaterBridge?.reconnectChatBridge()
+  } catch (error) {
+    message.warning(error instanceof Error ? error.message : '聊天桥接重连失败')
+  }
 }
 
 const startTheaterSync = async () => {
@@ -482,15 +807,16 @@ const startTheaterSync = async () => {
   if (!isCurrent()) return
   await chat.worldDetail(targetWorldId)
   if (!isCurrent()) return
-  if (chat.curChannel?.id !== targetChannelId) {
-    const switched = await chat.channelSwitchTo(targetChannelId)
+  const currentChannelId = channelId.value
+  if (chat.curChannel?.id !== currentChannelId) {
+    const switched = await chat.channelSwitchTo(currentChannelId)
     if (!isCurrent()) return
     if (!switched) throw new Error('无法进入小剧场频道')
   }
   const client = new TheaterSyncClient({
     worldId: targetWorldId,
     channelId: '',
-    inputChannelId: targetChannelId,
+    inputChannelId: channelId.value,
     scopeType: 'world',
     store: stageStore,
     sendGatewayAPI: (apiName, data) => chat.sendAPI(apiName, data),
@@ -583,6 +909,7 @@ const handleTheaterContext = (event: MessageEvent) => {
   const nextWorldId = data.worldId.trim()
   const nextChannelId = data.channelId.trim()
   if (!nextWorldId || !nextChannelId || (nextWorldId === worldId.value && nextChannelId === channelId.value)) return
+  const worldChanged = nextWorldId !== worldId.value
   worldId.value = nextWorldId
   channelId.value = nextChannelId
   void router.replace({
@@ -590,9 +917,16 @@ const handleTheaterContext = (event: MessageEvent) => {
     query: { ...route.query, worldId: nextWorldId, channelId: nextChannelId },
   })
   startTheaterBridge()
-  void startTheaterSync().catch((error) => {
-    message.error(error instanceof Error ? error.message : '小剧场同步启动失败')
-  })
+  if (worldChanged) {
+    void startTheaterSync().catch((error) => {
+      message.error(error instanceof Error ? error.message : '小剧场同步启动失败')
+    })
+  } else {
+    theaterSync?.setInputChannelId(nextChannelId)
+    if (chat.curChannel?.id !== nextChannelId) {
+      void chat.channelSwitchTo(nextChannelId)
+    }
+  }
 }
 
 const sendAppearancePreviewCommand = (command: TheaterEditorCommand, transient = false) => {
@@ -631,6 +965,7 @@ onMounted(async () => {
     }
     startTheaterBridge()
     window.addEventListener('message', handleTheaterContext)
+    window.addEventListener('message', handleDialogueSurfaceMessage)
 	window.addEventListener('message', handleDice3DMessage)
     await startTheaterSync()
   } catch (error) {
@@ -639,12 +974,18 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  theaterBridgeGeneration += 1
   theaterSyncGeneration += 1
   window.removeEventListener('message', handleTheaterContext)
+  window.removeEventListener('message', handleDialogueSurfaceMessage)
 	window.removeEventListener('message', handleDice3DMessage)
+  disposeAllDialogueSurfaceRuntimes()
+  dialogueSurfaceTargets.clear()
   appearancePreview.value = null
   theaterBridge?.stop()
   theaterBridge = null
+  chatBridgeOnline.value = false
+  chatBridgeStatus.value = 'disconnected'
   dialogueRuntime.dispose()
   void theaterSync?.stop()
   theaterSync = null
@@ -658,7 +999,11 @@ function handleDice3DMessage(event: MessageEvent) {
 </script>
 
 <template>
-  <main class="theater-host">
+  <main
+    class="theater-host"
+    :data-rich-message-world-id="worldId || undefined"
+    :data-rich-message-channel-id="channelId || undefined"
+  >
     <n-modal
       v-model:show="theaterActivationVisible"
       preset="dialog"
@@ -704,6 +1049,7 @@ function handleDice3DMessage(event: MessageEvent) {
           scope-type="world"
           :character-snapshot="characterSnapshot"
           :chat-bridge-online="chatBridgeOnline"
+          :chat-bridge-status="chatBridgeStatus"
           :chat-visible="chatVisible"
           :sync-ready="theaterSyncReady"
           :syncing="theaterSyncing"
@@ -727,6 +1073,8 @@ function handleDice3DMessage(event: MessageEvent) {
           @select-character-variant="selectChatCharacterVariant"
           @open-character-card="openCharacterCard"
           @toggle-chat="toggleChat"
+          @disconnect-chat-bridge="disconnectTheaterChatBridge"
+          @reconnect-chat-bridge="reconnectTheaterChatBridge"
           @reset-layout="resetLayout"
           @exit-theater="exitTheater"
           @appearance-preview-command="sendAppearancePreviewCommand"
@@ -738,6 +1086,7 @@ function handleDice3DMessage(event: MessageEvent) {
           :surface-element="stageSurfaceRef"
           :chat-surface-element="iframeRef"
         />
+		<TheaterFloatingHost ref="theaterFloatingHostRef" :chat-frame="iframeRef" :world-id="worldId" :channel-id="channelId" />
       </section>
 
       <div

@@ -318,6 +318,11 @@ import { useMessage, useDialog } from 'naive-ui';
 import type { ChannelIForm, ChannelIFormPlacement } from '@/types/iform';
 import { copyTextWithFallback } from '@/utils/clipboard';
 import { generateIFormEmbedLink } from '@/utils/iformEmbedLink';
+import {
+  generateInternalSurfaceLink,
+  openInternalSurfaceLink,
+  resolveInternalSurfaceLinkBase,
+} from '@/utils/internalSurfaceLink';
 import { api } from '@/stores/_config';
 import type { ChannelIFormTemplateCatalogItem } from '@/types/iform';
 
@@ -360,7 +365,7 @@ const formModel = reactive({
   bridgePolicy: {
     enabled: false,
     allowedOrigins: '',
-    capabilities: 'context.read,user.read,members.read,world.admins.read,characters.read,permissions.read,storage.read,storage.write,events.subscribe,events.publish,messages.send',
+    capabilities: 'context.read,user.read,members.read,world.admins.read,characters.read,permissions.read,storage.read,storage.write,events.subscribe,events.publish,messages.send,characterCard.read,characterCard.write',
   },
 });
 
@@ -480,8 +485,11 @@ const formMenuOptions = (form: ChannelIForm) => [
   { label: '在右侧打开', key: 'open-right', disabled: isMobileLayout.value },
   { label: '作为浮窗打开', key: 'open-floating' },
   { label: '复制嵌入链接', key: 'copy-link' },
+  { label: '复制外部链接', key: 'copy-internal-link' },
+  { label: '浏览器弹出', key: 'popout-internal', disabled: form.allowPopout === false },
   { type: 'divider', key: 'display-divider' },
   { label: '配置并推送', key: 'prepare-push', disabled: !iform.canBroadcast },
+  { label: '直接推送', key: 'push-single', disabled: !iform.canBroadcast },
   { label: '编辑配置', key: 'edit', disabled: !iform.canManage || !canEditForm(form) },
   {
     label: form.worldShared ? '取消世界共享' : '共享到世界',
@@ -499,9 +507,15 @@ const handleFormMenu = (key: string, form: ChannelIForm) => {
     openLocal(form, 'floating');
   } else if (key === 'copy-link') {
     void copyEmbedLink(form);
+  } else if (key === 'copy-internal-link') {
+    void copyInternalLink(form);
+  } else if (key === 'popout-internal') {
+    popoutInternalLink(form);
   } else if (key === 'prepare-push') {
     iform.setSelected([form.id]);
     activeTab.value = 'push';
+  } else if (key === 'push-single') {
+    void pushSingle(form);
   } else if (key === 'edit') {
     openFormModal(form);
   } else if (key === 'world-share') {
@@ -553,7 +567,7 @@ const resetFormModel = () => {
     bridgePolicy: {
       enabled: false,
       allowedOrigins: '',
-      capabilities: 'context.read,user.read,members.read,world.admins.read,characters.read,permissions.read,storage.read,storage.write,events.subscribe,events.publish,messages.send',
+      capabilities: 'context.read,user.read,members.read,world.admins.read,characters.read,permissions.read,storage.read,storage.write,events.subscribe,events.publish,messages.send,characterCard.read,characterCard.write',
     },
   });
 };
@@ -746,6 +760,60 @@ const copyEmbedLink = async (form: ChannelIForm) => {
     message.success('嵌入链接已复制');
   } else {
     message.error('复制失败');
+  }
+};
+
+const getInternalLink = (form: ChannelIForm) => {
+  const worldId = String(chat.currentWorldId || '').trim();
+  const channelId = String(iform.visibleChannelId || chat.curChannel?.id || '').trim();
+  if (!worldId || !channelId || !form?.id) {
+    message.warning('无法生成外部链接');
+    return null;
+  }
+  return generateInternalSurfaceLink({
+    type: 'iform',
+    id: form.id,
+    worldId,
+    channelId,
+  }, { base: resolveInternalSurfaceLinkBase(utils.config) });
+};
+
+const popoutInternalLink = (form: ChannelIForm) => {
+  const link = getInternalLink(form);
+  if (!link) return;
+  const opened = openInternalSurfaceLink(link, {
+    width: form.defaultWidth,
+    height: form.defaultHeight,
+  });
+  if (!opened) {
+    message.error('弹出失败，请允许浏览器弹窗');
+  }
+};
+
+const copyInternalLink = async (form: ChannelIForm) => {
+  const link = getInternalLink(form);
+  if (!link) return;
+  const copied = await copyTextWithFallback(link);
+  copied ? message.success('外部链接已复制') : message.error('复制失败');
+};
+
+const pushSingle = async (form: ChannelIForm) => {
+  if (!iform.canBroadcast) {
+    return;
+  }
+  try {
+    await iform.pushStates([
+      {
+        formId: form.id,
+        width: form.defaultWidth,
+        height: form.defaultHeight,
+        collapsed: !!form.defaultCollapsed,
+        floating: !!form.defaultFloating,
+      },
+    ], { force: true });
+    message.success('已推送到频道');
+  } catch (error: any) {
+    message.error(error?.response?.data?.message || '推送失败');
   }
 };
 

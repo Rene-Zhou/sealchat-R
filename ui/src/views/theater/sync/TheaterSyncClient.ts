@@ -2,8 +2,8 @@ import { watch, type WatchStopHandle } from 'vue'
 
 import { api } from '@/stores/_config'
 import { chatEvent } from '@/stores/chat'
-import type { StageActionTriggeredPayload, StageDrawing, StageImageRef, StageLiveState, StageObject, StageObjectType, StagePointerTrace, StagePointerTraceInput, StageScene, StageSurfaceFit, StageWorkspaceState } from '../shared/stage-types'
-import { isSafeStageImageUrl, normalizeStageAudioRef, normalizeStageEntranceConfig, normalizeStageImageAnnotation, normalizeStageMusicSnapshot, normalizeStageSceneTransition, normalizeStageSurfaceStyle } from '../shared/stage-types'
+import type { SceneFolder, StageActionTriggeredPayload, StageDrawing, StageImageRef, StageLiveState, StageObject, StageObjectType, StagePointerTrace, StagePointerTraceInput, StageScene, StageSurfaceFit, StageWorkspaceState } from '../shared/stage-types'
+import { isSafeStageImageUrl, normalizeStageAudioRef, normalizeStageEntranceConfig, normalizeStageImageAnnotation, normalizeStageMusicSnapshot, normalizeStageSceneOverlays, normalizeStageSceneTransition, normalizeStageSurfaceStyle } from '../shared/stage-types'
 import { createInitialTheaterStageState, type TheaterStageStore } from '../stage/StageStore'
 import { stageActionSchema } from '../bridge/theater-bridge-protocol'
 
@@ -42,7 +42,9 @@ interface TheaterSceneSnapshot {
   name: string
   switchText: string
   order: number
+  folderId?: string
   locked: boolean
+  published: boolean
   state: JsonObject
   objects: Record<string, TheaterObjectSnapshot>
 }
@@ -50,6 +52,7 @@ interface TheaterSceneSnapshot {
 interface TheaterDocument {
   activeSceneId: string | null
   liveState: JsonObject
+  sceneFolders: SceneFolder[]
   scenes: Record<string, TheaterSceneSnapshot>
   persistentObjects: Record<string, TheaterObjectSnapshot>
 }
@@ -62,6 +65,7 @@ interface TheaterSnapshotResponse {
   snapshot: {
     activeSceneId?: string | null
     liveState?: JsonObject
+    sceneFolders?: SceneFolder[]
     scenes?: Record<string, TheaterSceneSnapshot>
     persistentObjects?: Record<string, TheaterObjectSnapshot>
   }
@@ -126,6 +130,16 @@ const asObject = (value: unknown): JsonObject => value && typeof value === 'obje
   ? value as JsonObject
   : {}
 const finite = (value: unknown, fallback: number) => Number.isFinite(value) ? Number(value) : fallback
+
+// These state extensions are part of the server contract but are not rendered
+// directly by the stage store. Keep them explicitly; never round-trip unknown
+// top-level keys from persisted state.
+const sceneStateExtensionKeys = ['resources', 'ccfolia'] as const
+const sceneStateExtensionsFromRaw = (raw: JsonObject): JsonObject => Object.fromEntries(
+  sceneStateExtensionKeys.flatMap((key) => (
+    Object.prototype.hasOwnProperty.call(raw, key) ? [[key, clone(raw[key])]] : []
+  )),
+)
 const isRecord = (value: unknown): value is JsonObject => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 
 const same = (left: unknown, right: unknown): boolean => {
@@ -162,9 +176,16 @@ const mergeThreeWay = (base: unknown, local: unknown, remote: unknown): unknown 
   return result
 }
 
-const rebaseDocument = (base: TheaterDocument, local: TheaterDocument, remote: TheaterDocument): TheaterDocument => (
-  mergeThreeWay(base, local, remote) as TheaterDocument
-)
+const rebaseDocument = (base: TheaterDocument, local: TheaterDocument, remote: TheaterDocument): TheaterDocument => {
+  const result = mergeThreeWay(base, local, remote) as TheaterDocument
+  if (!result.activeSceneId || !result.scenes[result.activeSceneId]) {
+    result.activeSceneId = remote.activeSceneId && result.scenes[remote.activeSceneId]
+      ? remote.activeSceneId
+      : Object.values(result.scenes).sort((left, right) => left.order - right.order)[0]?.id || null
+    if (result.activeSceneId === remote.activeSceneId) result.liveState = clone(remote.liveState)
+  }
+  return result
+}
 
 const imageRef = (value: unknown): StageImageRef | null => {
   const raw = asObject(value)
@@ -224,18 +245,20 @@ const stageStateFromServer = (value: unknown, objects: Record<string, StageObjec
     fieldHeight: Math.max(1, finite(raw.fieldHeight, 24)),
     fieldObjectFit: grid.objectFit === 'fill' || grid.objectFit === 'contain' ? grid.objectFit : 'cover',
     displayGrid: grid.display === true,
+    gridOnTop: grid.onTop === true,
     gridSize: Math.max(0.01, finite(grid.size, 1)),
     alignWithGrid: grid.align === true,
     sceneObjects: objects,
     transition: normalizeStageSceneTransition(raw.transition),
     switchAudio: normalizeStageAudioRef(raw.switchAudio),
     musicSnapshot: normalizeStageMusicSnapshot(raw.musicSnapshot),
-    serverState: clone(raw),
+    sceneOverlays: normalizeStageSceneOverlays(raw.sceneOverlays),
+    serverState: sceneStateExtensionsFromRaw(raw),
   }
 }
 
 const serverStateFromStage = (state: StageLiveState): JsonObject => ({
-  ...asObject(state.serverState),
+  ...sceneStateExtensionsFromRaw(asObject(state.serverState)),
   background: state.background,
   foreground: state.foreground,
   surfaceStyles: clone(state.surfaceStyles),
@@ -245,19 +268,21 @@ const serverStateFromStage = (state: StageLiveState): JsonObject => ({
     backgroundColor: state.backgroundColor,
     objectFit: state.fieldObjectFit,
     display: state.displayGrid,
+    onTop: state.gridOnTop,
     size: state.gridSize,
     align: state.alignWithGrid,
   },
   transition: state.transition,
   switchAudio: state.switchAudio,
   musicSnapshot: state.musicSnapshot,
+  sceneOverlays: clone(state.sceneOverlays),
 })
 
 const objectFromServer = (value: TheaterObjectSnapshot): StageObject | null => {
   const content = asObject(value.content)
   const metadata = asObject(value.metadata)
   const legacyScale = finite(value.scale, 1) > 0 ? Math.min(100, finite(value.scale, 1)) : 1
-  const kind = ['group', 'drawing', 'text', 'image', 'button', 'character', 'video', 'effect'].includes(value.kind)
+  const kind = ['group', 'drawing', 'text', 'image', 'button', 'character', 'video', 'effect', 'iframe'].includes(value.kind)
     ? value.kind as StageObjectType
     : null
   if (!kind) return null
@@ -282,7 +307,7 @@ const objectFromServer = (value: TheaterObjectSnapshot): StageObject | null => {
     },
     visible: value.visible !== false,
     locked: value.locked === true,
-    aspectRatioLocked: value.aspectRatioLocked !== false,
+    aspectRatioLocked: kind === 'iframe' ? value.aspectRatioLocked === true : value.aspectRatioLocked !== false,
     interactive: structuralGroup ? false : value.interactive !== false,
     editable: structuralGroup ? false : value.editable === true,
     fill: typeof content.fill === 'string' ? content.fill : '#60a5fa',
@@ -355,10 +380,15 @@ const normalizeObjectSnapshots = (
 const normalizeDocument = (snapshot: TheaterSnapshotResponse['snapshot']): TheaterDocument => ({
   activeSceneId: typeof snapshot.activeSceneId === 'string' && snapshot.activeSceneId ? snapshot.activeSceneId : null,
   liveState: serverStateFromStage(stageStateFromServer(snapshot.liveState, {})),
+  sceneFolders: Array.isArray(snapshot.sceneFolders)
+    ? snapshot.sceneFolders.filter((folder) => folder && typeof folder.id === 'string' && typeof folder.name === 'string' && folder.id.trim() && folder.name.trim()).map((folder) => ({ id: folder.id.trim(), name: folder.name.trim() }))
+    : [],
   scenes: Object.fromEntries(Object.entries(snapshot.scenes || {}).map(([id, scene]) => [id, {
     ...scene,
     id,
     switchText: normalizeSwitchText(scene.switchText),
+    folderId: typeof scene.folderId === 'string' && scene.folderId.trim() ? scene.folderId.trim() : undefined,
+    published: scene.published === true,
     state: serverStateFromStage(stageStateFromServer(scene.state, {})),
     objects: normalizeObjectSnapshots(scene.objects, id),
   }])),
@@ -368,12 +398,15 @@ const normalizeDocument = (snapshot: TheaterSnapshotResponse['snapshot']): Theat
 const documentFromWorkspace = (workspace: StageWorkspaceState): TheaterDocument => ({
   activeSceneId: workspace.activeSceneId || null,
   liveState: serverStateFromStage(workspace.liveState),
+  sceneFolders: Array.isArray(workspace.sceneFolders) ? clone(workspace.sceneFolders) : [],
   scenes: Object.fromEntries(Object.values(workspace.scenes).map((scene) => [scene.id, {
     id: scene.id,
     name: scene.name,
     switchText: scene.switchText,
     order: scene.order,
+    ...(scene.folderId ? { folderId: scene.folderId } : {}),
     locked: scene.locked,
+    published: scene.published,
     state: serverStateFromStage(scene.state),
     objects: Object.fromEntries(Object.values(scene.state.sceneObjects).map((object) => [
       object.id,
@@ -387,7 +420,11 @@ const documentFromWorkspace = (workspace: StageWorkspaceState): TheaterDocument 
 })
 
 const workspaceFromDocument = (document: TheaterDocument): StageWorkspaceState => {
-  if (!Object.keys(document.scenes).length) return createInitialTheaterStageState()
+  if (!Object.keys(document.scenes).length) {
+    const initial = createInitialTheaterStageState()
+    initial.sceneFolders = Array.isArray(document.sceneFolders) ? clone(document.sceneFolders) : []
+    return initial
+  }
   const scenes = Object.fromEntries(Object.values(document.scenes).map((scene) => {
     const objects = Object.fromEntries(Object.values(scene.objects).flatMap((object) => {
       const parsed = objectFromServer(object)
@@ -398,7 +435,9 @@ const workspaceFromDocument = (document: TheaterDocument): StageWorkspaceState =
       name: scene.name,
       switchText: scene.switchText,
       order: scene.order,
+      ...(scene.folderId ? { folderId: scene.folderId } : {}),
       locked: scene.locked,
+      published: scene.published,
       state: stageStateFromServer(scene.state, objects),
     }
     return [scene.id, value]
@@ -414,6 +453,7 @@ const workspaceFromDocument = (document: TheaterDocument): StageWorkspaceState =
     activeSceneId,
     liveState: clone(scenes[activeSceneId].state),
     scenes,
+    sceneFolders: Array.isArray(document.sceneFolders) ? clone(document.sceneFolders) : [],
     persistentObjects,
     camera: { x: 0, y: 0, zoom: 0.5 },
     selectedObjectId: null,
@@ -514,6 +554,11 @@ const sortObjectsByParent = (objects: TheaterObjectSnapshot[]) => {
 
 const diffDocuments = (before: TheaterDocument, after: TheaterDocument): TheaterMutation[] => {
   const mutations: TheaterMutation[] = []
+  if (!same(before.sceneFolders, after.sceneFolders)) mutations.push({
+    type: 'scene.folders.update',
+    permission: 'stage.object.edit',
+    payload: { folders: after.sceneFolders },
+  })
   const beforeObjects = allObjects(before)
   const afterObjects = allObjects(after)
   const sharedSceneIDs = Object.keys(after.scenes).filter((sceneID) => Boolean(before.scenes[sceneID]))
@@ -532,11 +577,18 @@ const diffDocuments = (before: TheaterDocument, after: TheaterDocument): Theater
   Object.values(after.scenes)
     .filter((scene) => !before.scenes[scene.id])
     .sort((left, right) => left.order - right.order)
-    .forEach((scene) => mutations.push({
-      type: 'scene.create',
-      permission: 'stage.object.edit',
-      payload: { sceneId: scene.id, name: scene.name, switchText: scene.switchText, order: scene.order, state: scene.state },
-    }))
+    .forEach((scene) => {
+      mutations.push({
+        type: 'scene.create',
+        permission: 'stage.object.edit',
+        payload: { sceneId: scene.id, name: scene.name, switchText: scene.switchText, order: scene.order, ...(scene.folderId ? { folderId: scene.folderId } : {}), state: scene.state },
+      })
+      if (scene.published) mutations.push({
+        type: 'scene.update',
+        permission: 'stage.object.edit',
+        payload: { sceneId: scene.id, fields: { published: true } },
+      })
+    })
 
   Object.values(after.scenes).forEach((scene) => {
     const previous = before.scenes[scene.id]
@@ -544,8 +596,10 @@ const diffDocuments = (before: TheaterDocument, after: TheaterDocument): Theater
     const fields: JsonObject = {}
     if (scene.name !== previous.name) fields.name = scene.name
     if (scene.switchText !== previous.switchText) fields.switchText = scene.switchText
+    if ((scene.folderId || '') !== (previous.folderId || '')) fields.folderId = scene.folderId || ''
     if (!sceneOrderChanged && scene.order !== previous.order) fields.order = scene.order
     if (scene.locked !== previous.locked) fields.locked = scene.locked
+    if (scene.published !== previous.published) fields.published = scene.published
     if (!same(scene.state, previous.state)) fields.state = scene.state
     if (Object.keys(fields).length) mutations.push({
       type: 'scene.update',
@@ -640,6 +694,12 @@ const canApplyMutation = (mutation: TheaterMutation, permissions: string[], base
   })
 }
 
+const filterLocalSceneBrowsingMutations = (mutations: TheaterMutation[], permissions: string[]) => (
+  permissions.includes('stage.scene.switch')
+    ? mutations
+    : mutations.filter((mutation) => mutation.type !== 'scene.apply')
+)
+
 const filterDelegatedMutation = (mutation: TheaterMutation, baseDocument: TheaterDocument): TheaterMutation | null => {
   if (mutation.type !== 'object.update' && mutation.type !== 'object.batchUpdate') return null
   const objects = allObjects(baseDocument)
@@ -682,6 +742,7 @@ const isPermissionDenied = (error: unknown) => {
 }
 
 export class TheaterSyncClient {
+  private inputChannelId: string
   private revision = 0
   private schemaVersion = 1
   private permissions: string[] = []
@@ -834,7 +895,13 @@ export class TheaterSyncClient {
     void this.subscribe()
   }
 
-  constructor(private readonly options: TheaterSyncOptions) {}
+  constructor(private readonly options: TheaterSyncOptions) {
+    this.inputChannelId = options.inputChannelId || options.channelId
+  }
+
+  setInputChannelId(channelId: string) {
+    this.inputChannelId = channelId.trim()
+  }
 
   async start() {
     if (this.started) return
@@ -854,6 +921,7 @@ export class TheaterSyncClient {
       this.options.store.state.activeSceneId,
       this.options.store.state.liveState,
       this.options.store.state.scenes,
+      this.options.store.state.sceneFolders,
       this.options.store.state.persistentObjects,
     ], () => this.scheduleFlush(), { deep: true, flush: 'sync' })
     await this.subscribe()
@@ -993,7 +1061,7 @@ export class TheaterSyncClient {
     await this.options.sendGatewayAPI('theater.pointer', {
       worldId: this.options.worldId,
       channelId: this.options.scopeType === 'world' ? '' : this.options.channelId,
-      inputChannelId: this.options.inputChannelId || this.options.channelId,
+      inputChannelId: this.inputChannelId || this.options.channelId,
       traceId: trace.traceId,
       identityId: trace.identityId,
       variantId: trace.variantId || '',
@@ -1048,7 +1116,7 @@ export class TheaterSyncClient {
       objectId: payload.objectId,
       actionId: payload.actionId,
       ...(payload.stepId ? { stepId: payload.stepId } : {}),
-      inputChannelId: this.options.inputChannelId || this.options.channelId,
+      inputChannelId: this.inputChannelId || this.options.channelId,
       expectedRevision: this.revision,
     })
   }
@@ -1185,6 +1253,7 @@ export class TheaterSyncClient {
     const desired = documentFromWorkspace(this.options.store.getSnapshot())
     const baseAtFlush = clone(this.baseDocument)
     let mutations = diffDocuments(this.baseDocument, desired)
+    mutations = filterLocalSceneBrowsingMutations(mutations, this.permissions)
     if (this.permissions.includes('stage.object.edit.delegated') && !this.permissions.includes('stage.object.edit')) {
       mutations = mutations.flatMap((mutation) => {
         const filtered = filterDelegatedMutation(mutation, this.baseDocument)
@@ -1222,7 +1291,9 @@ export class TheaterSyncClient {
         if (!this.started) return
         this.revision = finite(response.data?.revision, this.revision + 1)
       }
-      this.baseDocument = desired
+      this.baseDocument = this.permissions.includes('stage.scene.switch')
+        ? desired
+        : { ...desired, activeSceneId: baseAtFlush.activeSceneId, liveState: baseAtFlush.liveState }
       this.consecutiveConflicts = 0
     } catch (error) {
       if (!this.started) return
@@ -1248,9 +1319,13 @@ export class TheaterSyncClient {
       this.options.onSyncingChange?.(false)
       const shouldReload = this.pendingRemoteRevision > this.revision
       this.pendingRemoteRevision = 0
+      const remainingMutations = filterLocalSceneBrowsingMutations(
+        diffDocuments(this.baseDocument, documentFromWorkspace(this.options.store.getSnapshot())),
+        this.permissions,
+      )
       const hasLocalChanges = this.flushAgain
         || Boolean(this.flushTimer)
-        || diffDocuments(this.baseDocument, documentFromWorkspace(this.options.store.getSnapshot())).length > 0
+        || remainingMutations.length > 0
       if (shouldReload && !hasLocalChanges) await this.reload()
       if (this.flushAgain) {
         this.flushAgain = false
@@ -1264,7 +1339,10 @@ export const theaterSyncTesting = {
   canApplyMutation,
   diffDocuments,
   documentFromWorkspace,
+  filterLocalSceneBrowsingMutations,
   normalizeDocument,
   rebaseDocument,
+  serverStateFromStage,
+  stageStateFromServer,
   workspaceFromDocument,
 }
