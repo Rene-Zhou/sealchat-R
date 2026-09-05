@@ -4259,8 +4259,8 @@ defineExpose({
 .tiptap-toolbar {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 6px 8px;
+  gap: clamp(2px, 0.3vw, 4px);
+  padding: 6px clamp(4px, 0.6vw, 8px);
   border-bottom: 1px solid var(--sc-border-mute, #e5e7eb);
   background-color: var(--sc-bg-elevated, #ffffff);
   flex-wrap: wrap;
@@ -4269,14 +4269,16 @@ defineExpose({
 .tiptap-toolbar__group {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: clamp(2px, 0.3vw, 4px);
 }
 
-/* Material 3 风格工具栏按钮：32x32、8px 圆角（small shape）、state layer 悬停/激活 */
+/* Material 3 风格工具栏按钮：8px 圆角（small shape）、state layer 悬停/激活；
+   尺寸随视口宽度平滑缩放（1280px 视口约 27.5px，≥1560px 保持 32px），
+   窄屏/高缩放下保持单行排布 */
 .tiptap-toolbar :deep(.n-button) {
-  min-width: 32px;
-  height: 32px;
-  padding: 0 6px;
+  min-width: clamp(27px, calc(1.6vw + 7px), 32px);
+  height: clamp(27px, calc(1.6vw + 7px), 32px);
+  padding: 0 clamp(2px, 0.35vw, 6px);
   border-radius: 8px;
 }
 
@@ -4329,6 +4331,18 @@ defineExpose({
   min-width: 12.5rem;
 }
 
+/* 窄视口（如 1080p/150% 缩放）下收缩字体选择器，保证工具栏单行排布 */
+@media (max-width: 1400px) {
+  .tiptap-toolbar__group--font {
+    flex-basis: 6rem;
+    min-width: 6rem;
+  }
+
+  .tiptap-toolbar__group--font.is-expanded {
+    flex-basis: 10rem;
+    min-width: 10rem;
+  }
+}
 .tiptap-platform-font-select {
   width: 100%;
   min-width: 0;
@@ -4342,7 +4356,7 @@ defineExpose({
   width: 1px;
   height: 20px;
   background-color: var(--sc-border-mute, rgba(148, 163, 184, 0.35));
-  margin: 0 6px;
+  margin: 0 clamp(2px, 0.35vw, 6px);
 }
 
 .tiptap-editor-wrapper {
